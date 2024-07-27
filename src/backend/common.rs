@@ -14,6 +14,7 @@ use crate::{
     hid::{get_keymap_wl, get_keymap_x11},
     overlays::{
         anchor::create_anchor,
+        cef::create_cef,
         keyboard::create_keyboard,
         screen::WlxClientAlias,
         watch::{create_watch, WATCH_NAME},
@@ -118,6 +119,9 @@ where
         keyboard.state.show_hide = true;
         keyboard.state.want_visible = false;
         overlays.insert(keyboard.state.id, keyboard);
+
+        let cef = create_cef(app)?;
+        overlays.insert(cef.state.id, cef);
 
         Ok(Self { overlays, wl })
     }

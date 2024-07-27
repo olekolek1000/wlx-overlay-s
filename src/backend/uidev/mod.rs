@@ -17,65 +17,60 @@ use winit::{
 };
 
 use crate::{
-    config::load_custom_ui,
-    config_io,
     graphics::{DynamicPass, DynamicPipeline, WlxGraphics, BLEND_ALPHA},
-    gui::{
-        canvas::Canvas,
-        modular::{modular_canvas, ModularData},
-    },
     hid::USE_UINPUT,
+    overlays::cef::create_cef,
     state::{AppState, ScreenMeta},
 };
 
 use super::{
     input::{TrackedDevice, TrackedDeviceRole},
-    overlay::OverlayRenderer,
+    overlay::{OverlayBackend, OverlayData},
 };
 
 static LAST_SIZE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 struct PreviewState {
-    canvas: Canvas<(), ModularData>,
+    backend: Box<dyn OverlayBackend>,
     pipeline: Arc<DynamicPipeline>,
     pass: DynamicPass,
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<ImageView>>,
 }
 
+#[derive(Default)]
+pub struct StubOverlayData {}
+
 impl PreviewState {
     fn new(
         state: &mut AppState,
         surface: Arc<Surface>,
         window: Arc<Window>,
-        panel_name: &str,
     ) -> anyhow::Result<Self> {
-        let config = load_custom_ui(panel_name)?;
-
         let last_size = {
             let size_u64 = LAST_SIZE.load(std::sync::atomic::Ordering::Relaxed);
             [size_u64 as u32, (size_u64 >> 32) as u32]
         };
 
-        if last_size != config.size {
-            let logical_size = LogicalSize::new(config.size[0], config.size[1]);
-            let _ = window.request_inner_size(logical_size);
-            window.set_min_inner_size(Some(logical_size));
-            window.set_max_inner_size(Some(logical_size));
-            LAST_SIZE.store(
-                (config.size[1] as u64) << 32 | config.size[0] as u64,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-        }
+        let preview_size: [u32; 2] = [1280, 720];
+
+        let logical_size = LogicalSize::new(preview_size[0], preview_size[1]);
+        let _ = window.request_inner_size(logical_size);
+        window.set_min_inner_size(Some(logical_size));
+        window.set_max_inner_size(Some(logical_size));
+        LAST_SIZE.store(
+            (preview_size[1] as u64) << 32 | preview_size[0] as u64,
+            std::sync::atomic::Ordering::Relaxed,
+        );
 
         let inner_size = window.inner_size();
         let swapchain_size = [inner_size.width, inner_size.height];
         let (swapchain, images) =
             create_swapchain(&state.graphics, surface.clone(), swapchain_size)?;
 
-        let mut canvas = modular_canvas(&config.size, &config.elements, state)?;
-        canvas.init(state)?;
-        let view = canvas.view().unwrap();
+        let mut cef: OverlayData<StubOverlayData> = create_cef(state)?;
+
+        let view = cef.backend.view().unwrap();
 
         let pipeline = {
             let shaders = state.graphics.shared_shaders.read().unwrap();
@@ -100,7 +95,7 @@ impl PreviewState {
             .unwrap();
 
         Ok(PreviewState {
-            canvas,
+            backend: cef.backend,
             pipeline,
             pass,
             swapchain,
@@ -109,10 +104,10 @@ impl PreviewState {
     }
 }
 
-pub fn uidev_run(panel_name: &str) -> anyhow::Result<()> {
+pub fn uidev_run(_panel_name: &str) -> anyhow::Result<()> {
     let (graphics, event_loop, window, surface) = WlxGraphics::new_window()?;
     window.set_resizable(false);
-    window.set_title("WlxOverlay UI Preview");
+    window.set_title("WlxOverlay CEF Preview");
 
     USE_UINPUT.store(false, std::sync::atomic::Ordering::Relaxed);
 
@@ -124,11 +119,8 @@ pub fn uidev_run(panel_name: &str) -> anyhow::Result<()> {
         &mut state,
         surface.clone(),
         window.clone(),
-        panel_name,
     )?);
 
-    let watch_path = config_io::CONFIG_ROOT_PATH.join(format!("{}.yaml", panel_name));
-    let mut path_last_modified = watch_path.metadata()?.modified()?;
     let mut recreate = false;
     let mut last_draw = std::time::Instant::now();
 
@@ -143,26 +135,13 @@ pub fn uidev_run(panel_name: &str) -> anyhow::Result<()> {
                 elwt.exit();
             }
             Event::WindowEvent {
-                event: WindowEvent::Resized(_),
-                ..
-            } => {
-                recreate = true;
-            }
-            Event::WindowEvent {
                 event: WindowEvent::RedrawRequested,
                 ..
             } => {
-                let new_modified = watch_path.metadata().unwrap().modified().unwrap();
-                if new_modified > path_last_modified {
-                    recreate = true;
-                    path_last_modified = new_modified;
-                }
-
                 if recreate {
                     drop(preview.take());
                     preview = Some(
-                        PreviewState::new(&mut state, surface.clone(), window.clone(), panel_name)
-                            .unwrap(),
+                        PreviewState::new(&mut state, surface.clone(), window.clone()).unwrap(),
                     );
                     recreate = false;
                     window.request_redraw();
@@ -182,10 +161,10 @@ pub fn uidev_run(panel_name: &str) -> anyhow::Result<()> {
                             Err(e) => panic!("failed to acquire next image: {e}"),
                         };
 
-                    if let Err(e) = preview.canvas.render(&mut state) {
+                    if let Err(e) = preview.backend.render(&mut state) {
                         log::error!("failed to render canvas: {e}");
                         window.request_redraw();
-                    };
+                    }
 
                     let target = preview.images[image_index as usize].clone();
 

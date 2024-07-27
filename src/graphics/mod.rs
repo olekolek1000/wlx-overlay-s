@@ -11,8 +11,8 @@ use anyhow::{anyhow, bail};
 use ash::vk::SubmitInfo;
 use smallvec::smallvec;
 
-#[cfg(feature = "openvr")]
-use vulkano::{device::physical::PhysicalDeviceType, instance::InstanceCreateFlags};
+use vulkano::device::physical::PhysicalDeviceType;
+use vulkano::instance::InstanceCreateFlags;
 
 #[cfg(feature = "openxr")]
 use {ash::vk, std::os::raw::c_void};

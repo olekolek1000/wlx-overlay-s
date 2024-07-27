@@ -1,0 +1,11 @@
+#!/bin/bash
+
+set -e
+
+export LD_LIBRARY_PATH=./wlxcefwrapper/build
+
+cargo build
+export LD_PRELOAD=./wlxcefwrapper/cef/Release/libcef.so
+./target/debug/wlx-overlay-s --uidev aaa
+
+#--uidev aaa

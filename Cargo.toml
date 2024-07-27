@@ -69,7 +69,7 @@ image_dds = { version = "0.5.1", default-features = false, features = [
 ] }
 
 [features]
-default = ["openvr", "openxr", "osc", "x11", "wayland"]
+default = ["openxr", "osc", "x11", "wayland", "cef", "uidev"]
 openvr = ["dep:ovr_overlay", "dep:json"]
 openxr = ["dep:openxr"]
 osc = ["dep:rosc"]
@@ -78,4 +78,5 @@ wayland = ["pipewire", "wlx-capture/wlr", "xkbcommon/wayland"]
 pipewire = ["wlx-capture/pipewire"]
 uidev = ["dep:winit"]
 xcb = ["dep:xcb"]
+cef = []
 as-raw-xcb-connection = []
