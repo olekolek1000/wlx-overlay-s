@@ -7,9 +7,7 @@ class Handler;
 
 class App : public CefApp, public CefBrowserProcessHandler {
 public:
-  App(std::string_view url);
-
-  std::string url;
+  App();
 
   CefRefPtr<CefRenderProcessHandler> render_process_handler;
 
@@ -18,10 +16,12 @@ public:
   void OnContextInitialized() override;
   CefRefPtr<CefClient> GetDefaultClient() override;
 
-  void setHandler(const CefRefPtr<Handler> &handler);
+  void setHandlers(const CefRefPtr<Handler> &handler_navbar,
+                   const CefRefPtr<Handler> &handler_content);
 
 private:
-  CefRefPtr<Handler> handler;
+  CefRefPtr<Handler> handler_navbar;
+  CefRefPtr<Handler> handler_content;
 
   IMPLEMENT_REFCOUNTING(App);
 };

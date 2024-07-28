@@ -1,0 +1,150 @@
+@font-face {
+	font-family: uifont;
+	src: url(font.ttf);
+}
+
+:root {
+	--color-dark: #222;
+	--color-gray: #444;
+	--panel-height: 48px;
+	--round-radius: 5px;
+}
+
+#browser_iframe {
+	width: 100%;
+	height: 100%;
+	border: 0;
+}
+
+body {
+	margin: 0;
+	font-family: uifont;
+	color: #fff;
+}
+
+.top_panel {
+	display: flex;
+	background-color: var(--color-dark);
+	overflow: hidden;
+	width: 100vw;
+	height: 100vh;
+	height: var(--panel-height);
+}
+
+.website_contents {
+	width: 100%;
+	height: 100%;
+}
+
+.nav_buttons_left {
+	display: flex;
+}
+
+.nav_buttons_right {
+	display: flex;
+}
+
+.search_bar_parent {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	flex-grow: 1;
+}
+
+.search_bar_glimmer {
+	box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+#search_bar_bg {
+	padding-left: 6px;
+
+	background-color: var(--color-gray);
+	border-radius: var(--round-radius);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 80%;
+}
+
+#input_search {
+	all: unset;
+	min-width: 0px;
+	width: 0px;
+	flex-grow: 1;
+	padding-left: 12px;
+	padding-right: 12px;
+	height: 32px;
+
+	border: 0;
+}
+
+.search_bar_bg:focus {
+	border: 1px solid white;
+}
+
+.nav_button {
+	width: calc(var(--panel-height) - 24px);
+	height: calc(var(--panel-height) - 24px);
+	padding: 12px;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+}
+
+.nav_button_small {
+	width: 32px;
+	height: 32px;
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	border-radius: var(--round-radius);
+}
+
+.nav_button:hover,
+.nav_button_small:hover {
+	background-color: rgba(255, 255, 255, 0.1);
+	box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.nav_button:active,
+.nav_button_small:active {
+	background-color: rgba(0, 0, 0, 0.5);
+	box-shadow: inset 0 0 0 2px #000;
+	filter: invert();
+}
+
+.icon_nav {
+	background-size: contain;
+	background-repeat: no-repeat;
+	width: 100%;
+	height: 100%;
+}
+
+.icon_small {
+	width: 20px;
+	height: 20px;
+}
+
+.icon_nav_back {
+	background-image: url("icons/MaterialSymbolsArrowBack.svg");
+}
+
+.icon_nav_forward {
+	background-image: url("icons/MaterialSymbolsArrowForward.svg");
+}
+
+.icon_nav_refresh {
+	background-image: url("icons/MaterialSymbolsRefresh.svg");
+}
+
+.icon_send {
+	background-image: url("icons/MaterialSymbolsSend.svg");
+}
+
+.icon_globe {
+	background-image: url("icons/MaterialSymbolsGlobe.svg");
+}
+
+.icon_new_window {
+	background-image: url("icons/MaterialSymbolsNewWindow.svg");
+}

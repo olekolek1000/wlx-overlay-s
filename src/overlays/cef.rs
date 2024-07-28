@@ -1,7 +1,7 @@
 use core::str;
-use std::slice;
 #[allow(dead_code)]
 use std::sync::Arc;
+use std::{cell::RefCell, ffi::CString, rc::Rc, slice, sync::Mutex};
 
 use glam::{vec2, vec3a, Affine2, Vec2};
 use libc::strlen;
@@ -28,6 +28,8 @@ extern "C" {
     fn wlxcef_get_error() -> *const libc::c_char;
     fn wlxcef_init() -> libc::c_int;
     fn wlxcef_free() -> libc::c_int;
+    fn wlxcef_set_url(tab_id: libc::c_int, url: *const libc::c_char) -> libc::c_int;
+    fn wlxcef_is_ready(tab_id: libc::c_int) -> libc::c_int;
     fn wlxcef_create_tab() -> libc::c_int;
     fn wlxcef_tick_message_loop() -> libc::c_void;
     fn wlxcef_free_tab(tab_id: libc::c_int) -> libc::c_int;
@@ -54,8 +56,9 @@ fn get_error_msg() -> &'static str {
     unsafe { cstring_to_rust_string(wlxcef_get_error()) }
 }
 
-struct CEFContext {
-    tab_id: i32,
+pub struct CEFContext {
+    pub tab_id: i32,
+    pub initialized: bool,
 }
 
 impl CEFContext {
@@ -71,8 +74,28 @@ impl CEFContext {
                 panic!("wlxcef_create_tab failed: {}", get_error_msg());
             }
 
-            Ok(Self { tab_id })
+            Ok(Self {
+                tab_id,
+                initialized: false,
+            })
         }
+    }
+
+    pub fn is_ready(&mut self) -> bool {
+        if !self.initialized {
+            unsafe {
+                if wlxcef_is_ready(self.tab_id) == 1 {
+                    let str = CString::new("https://bing.com").unwrap();
+                    if wlxcef_set_url(self.tab_id, str.as_ptr()) < 0 {
+                        panic!("wlxcef_set_url failed: {}", get_error_msg());
+                    }
+                    self.initialized = true;
+                    log::info!("CEF tab is ready");
+                }
+            }
+        }
+
+        self.initialized
     }
 }
 
@@ -131,12 +154,12 @@ fn update_image(image: &Arc<Image>, graphics: Arc<WlxGraphics>, data: &[u8]) -> 
 }
 
 pub struct CEFInteractionHandler {
-    context: Arc<CEFContext>,
+    context: Rc<RefCell<CEFContext>>,
     mouse_transform: Affine2,
 }
 
 impl CEFInteractionHandler {
-    pub fn new(context: Arc<CEFContext>, mouse_transform: Affine2) -> Self {
+    pub fn new(context: Rc<RefCell<CEFContext>>, mouse_transform: Affine2) -> Self {
         Self {
             context,
             mouse_transform,
@@ -147,13 +170,13 @@ impl CEFInteractionHandler {
 pub struct CEFRenderer {
     image: Arc<Image>,
     view: Arc<ImageView>,
-    context: Arc<CEFContext>,
+    context: Rc<RefCell<CEFContext>>,
     graphics: Arc<WlxGraphics>,
 }
 
 impl InteractionHandler for CEFInteractionHandler {
     fn on_hover(&mut self, _app: &mut AppState, hit: &input::PointerHit) -> Option<input::Haptics> {
-        let tab_id = self.context.tab_id;
+        let tab_id = self.context.borrow().tab_id;
         let pos = self.mouse_transform.transform_point2(hit.uv);
         unsafe {
             wlxcef_mouse_move(tab_id, pos.x as i32, pos.y as i32);
@@ -164,7 +187,7 @@ impl InteractionHandler for CEFInteractionHandler {
     fn on_left(&mut self, _app: &mut AppState, _pointer: usize) {}
 
     fn on_pointer(&mut self, _app: &mut AppState, hit: &input::PointerHit, pressed: bool) {
-        let tab_id = self.context.tab_id;
+        let tab_id = self.context.borrow().tab_id;
         unsafe {
             let index = match hit.mode {
                 input::PointerMode::Left => 0,
@@ -178,7 +201,7 @@ impl InteractionHandler for CEFInteractionHandler {
     }
 
     fn on_scroll(&mut self, _app: &mut AppState, _hit: &input::PointerHit, delta: f32) {
-        let tab_id = self.context.tab_id;
+        let tab_id = self.context.borrow().tab_id;
         unsafe {
             wlxcef_mouse_scroll(tab_id, delta);
         }
@@ -206,7 +229,7 @@ impl CEFRenderer {
         Ok(Self {
             image,
             view,
-            context: Arc::new(CEFContext::new()?),
+            context: Rc::new(RefCell::new(CEFContext::new()?)),
             graphics: app.graphics.clone(),
         })
     }
@@ -226,10 +249,14 @@ impl OverlayRenderer for CEFRenderer {
     }
 
     fn render(&mut self, _app: &mut AppState) -> anyhow::Result<()> {
+        if !self.context.borrow_mut().is_ready() {
+            return Ok(());
+        }
+
         unsafe {
             wlxcef_tick_message_loop();
 
-            let tab_id = self.context.tab_id;
+            let tab_id = self.context.borrow().tab_id;
             let viewport_width = wlxcef_get_viewport_width(tab_id);
             let viewport_height = wlxcef_get_viewport_height(tab_id);
             let data = wlxcef_get_viewport_data_rgba(tab_id);
@@ -267,7 +294,7 @@ where
         recenter: true,
         grabbable: true,
         z_order: 100,
-        spawn_scale: 1.0,
+        spawn_scale: 2.0,
         spawn_point: vec3a(0.0, -0.5, 0.0),
         interaction_transform,
         ..Default::default()

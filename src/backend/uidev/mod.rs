@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use glam::vec2;
 use vulkano::{
     command_buffer::CommandBufferUsage,
     image::{view::ImageView, ImageUsage},
@@ -11,7 +12,7 @@ use vulkano::{
 };
 use winit::{
     dpi::LogicalSize,
-    event::{Event, WindowEvent},
+    event::{ElementState, Event, WindowEvent},
     event_loop::ControlFlow,
     window::Window,
 };
@@ -24,7 +25,7 @@ use crate::{
 };
 
 use super::{
-    input::{TrackedDevice, TrackedDeviceRole},
+    input::{PointerHit, TrackedDevice, TrackedDeviceRole},
     overlay::{OverlayBackend, OverlayData},
 };
 
@@ -124,77 +125,95 @@ pub fn uidev_run(_panel_name: &str) -> anyhow::Result<()> {
     let mut recreate = false;
     let mut last_draw = std::time::Instant::now();
 
+    let mut uv = vec2(0.0, 0.0);
+
     event_loop.run(move |event, elwt| {
         elwt.set_control_flow(ControlFlow::Poll);
 
         match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => {
-                elwt.exit();
-            }
-            Event::WindowEvent {
-                event: WindowEvent::RedrawRequested,
-                ..
-            } => {
-                if recreate {
-                    drop(preview.take());
-                    preview = Some(
-                        PreviewState::new(&mut state, surface.clone(), window.clone()).unwrap(),
+            Event::WindowEvent { event, .. } => match event {
+                WindowEvent::CursorMoved { position, .. } => {
+                    uv = vec2(position.x as f32 / 1280.0, position.y as f32 / 720.0);
+                    preview.as_mut().unwrap().backend.on_hover(
+                        &mut state,
+                        &PointerHit {
+                            uv,
+                            ..Default::default()
+                        },
                     );
-                    recreate = false;
-                    window.request_redraw();
                 }
-
-                {
-                    let preview = preview.as_mut().unwrap();
-                    let (image_index, _, acquire_future) =
-                        match acquire_next_image(preview.swapchain.clone(), None)
-                            .map_err(Validated::unwrap)
-                        {
-                            Ok(r) => r,
-                            Err(VulkanError::OutOfDate) => {
-                                recreate = true;
-                                return;
-                            }
-                            Err(e) => panic!("failed to acquire next image: {e}"),
-                        };
-
-                    if let Err(e) = preview.backend.render(&mut state) {
-                        log::error!("failed to render canvas: {e}");
+                WindowEvent::MouseInput {
+                    state: input_state, ..
+                } => {
+                    preview.as_mut().unwrap().backend.on_pointer(
+                        &mut state,
+                        &PointerHit {
+                            uv,
+                            ..Default::default()
+                        },
+                        input_state.is_pressed(),
+                    );
+                }
+                WindowEvent::RedrawRequested => {
+                    if recreate {
+                        drop(preview.take());
+                        preview = Some(
+                            PreviewState::new(&mut state, surface.clone(), window.clone()).unwrap(),
+                        );
+                        recreate = false;
                         window.request_redraw();
                     }
 
-                    let target = preview.images[image_index as usize].clone();
+                    {
+                        let preview = preview.as_mut().unwrap();
+                        let (image_index, _, acquire_future) =
+                            match acquire_next_image(preview.swapchain.clone(), None)
+                                .map_err(Validated::unwrap)
+                            {
+                                Ok(r) => r,
+                                Err(VulkanError::OutOfDate) => {
+                                    recreate = true;
+                                    return;
+                                }
+                                Err(e) => panic!("failed to acquire next image: {e}"),
+                            };
 
-                    let mut cmd_buf = state
-                        .graphics
-                        .create_command_buffer(CommandBufferUsage::OneTimeSubmit)
-                        .unwrap();
-                    cmd_buf.begin_rendering(target).unwrap();
-                    cmd_buf.run_ref(&preview.pass).unwrap();
-                    cmd_buf.end_rendering().unwrap();
-                    last_draw = std::time::Instant::now();
+                        if let Err(e) = preview.backend.render(&mut state) {
+                            log::error!("failed to render canvas: {e}");
+                            window.request_redraw();
+                        }
 
-                    let command_buffer = cmd_buf.build().unwrap();
-                    vulkano::sync::now(graphics.device.clone())
-                        .join(acquire_future)
-                        .then_execute(graphics.queue.clone(), command_buffer)
-                        .unwrap()
-                        .then_swapchain_present(
-                            graphics.queue.clone(),
-                            SwapchainPresentInfo::swapchain_image_index(
-                                preview.swapchain.clone(),
-                                image_index,
-                            ),
-                        )
-                        .then_signal_fence_and_flush()
-                        .unwrap()
-                        .wait(None)
-                        .unwrap();
+                        let target = preview.images[image_index as usize].clone();
+
+                        let mut cmd_buf = state
+                            .graphics
+                            .create_command_buffer(CommandBufferUsage::OneTimeSubmit)
+                            .unwrap();
+                        cmd_buf.begin_rendering(target).unwrap();
+                        cmd_buf.run_ref(&preview.pass).unwrap();
+                        cmd_buf.end_rendering().unwrap();
+                        last_draw = std::time::Instant::now();
+
+                        let command_buffer = cmd_buf.build().unwrap();
+                        vulkano::sync::now(graphics.device.clone())
+                            .join(acquire_future)
+                            .then_execute(graphics.queue.clone(), command_buffer)
+                            .unwrap()
+                            .then_swapchain_present(
+                                graphics.queue.clone(),
+                                SwapchainPresentInfo::swapchain_image_index(
+                                    preview.swapchain.clone(),
+                                    image_index,
+                                ),
+                            )
+                            .then_signal_fence_and_flush()
+                            .unwrap()
+                            .wait(None)
+                            .unwrap();
+                    }
                 }
-            }
+                _ => {}
+            },
             Event::AboutToWait => {
                 if last_draw.elapsed().as_millis() > 100 {
                     window.request_redraw();

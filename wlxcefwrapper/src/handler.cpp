@@ -1,5 +1,6 @@
 #include "handler.hpp"
 #include "app.hpp"
+#include "fmt/format.h"
 #include "include/base/cef_bind.h"
 #include "include/base/cef_callback.h"
 #include "include/cef_app.h"
@@ -11,17 +12,12 @@
 #include "include/views/cef_window.h"
 #include "include/wrapper/cef_closure_task.h"
 #include "include/wrapper/cef_helpers.h"
+#include "logs.hpp"
+#include "navbar_interface.hpp"
 #include "render_handler.hpp"
+#include "util.hpp"
 #include <chrono>
 #include <thread>
-
-namespace {
-std::string GetDataURI(const std::string &data, const std::string &mime_type) {
-  return "data:" + mime_type + ";base64," +
-         CefURIEncode(CefBase64Encode(data.data(), data.size()), false)
-             .ToString();
-}
-} // namespace
 
 Handler::Handler(App *app, uint32_t viewport_w, uint32_t viewport_h,
                  bool debug_window)
@@ -37,6 +33,26 @@ Handler::Handler(App *app, uint32_t viewport_w, uint32_t viewport_h,
 
 Handler::~Handler() { freeSDL(); }
 
+void Handler::setCallbackAddressChange(
+    std::function<void(std::string)> &&callback) {
+  this->callback_address_change = std::move(callback);
+}
+
+void Handler::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
+  logs::print("afterCreated called");
+  this->browser = browser;
+}
+
+static bool replaceString(std::string &str, const std::string &from,
+                          const std::string &to) {
+  size_t start_pos = str.find(from);
+  if (start_pos == std::string::npos) {
+    return false;
+  }
+  str.replace(start_pos, from.size(), to);
+  return true;
+}
+
 void Handler::OnLoadError(CefRefPtr<CefBrowser> browser,
                           CefRefPtr<CefFrame> frame, ErrorCode errorCode,
                           const CefString &errorText,
@@ -47,26 +63,84 @@ void Handler::OnLoadError(CefRefPtr<CefBrowser> browser,
     return;
   }
 
-  std::stringstream ss;
-  ss << "<html><body bgcolor=\"white\">"
-        "<h2>Failed to load URL "
-     << std::string(failedUrl) << " with error " << std::string(errorText)
-     << " (" << errorCode << ").</h2></body></html>";
+  std::string str = R"STR(
+<!DOCTYPE html>
+<html>
+	<head>
+		<title>Webpage load error</title>
+		<style>
+			body {
+				font-family: system-ui;
+				background-color: #333;
+        align-text: center;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        flex-direction: column;
+			}
+			h2 {
+				color: #CCC;
+			}
+      h3 {
+        color: #AAA;
+      }
+      h4 {
+        color: #888;
+      }
+		</style>
+	</head>
+	<body>
+		<h2>
+      Load Error
+    </h2>
+    <h3>
+      {content}
+    </h3>
+    <h4>
+      {error}
+    </h4>
+	</body>
+</html>
+)STR";
 
-  frame->LoadURL(GetDataURI(ss.str(), "text/html"));
+  replaceString(str, "{content}",
+                fmt::format("Failed to load URL {}", failedUrl.ToString()));
+
+  replaceString(str, "{error}", fmt::format("Error: {}", errorText.ToString()));
+
+  frame->LoadURL(util::getDataURI(str, "text/html"));
 }
 
 void Handler::OnAddressChange(CefRefPtr<CefBrowser> browser,
                               CefRefPtr<CefFrame> frame, const CefString &url) {
-  fprintf(stderr, "Address changed to %s\n", url.ToString().c_str());
-  this->browser = browser;
+  auto url_str = url.ToString();
+  logs::print("Address changed to {}", url_str.c_str());
+  if (callback_address_change) {
+    callback_address_change(url_str);
+  }
 }
 
 bool Handler::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
                                cef_log_severity_t level,
                                const CefString &message,
                                const CefString &source, int line) {
+  logs::print("Console message: {}", message.ToString());
   return false;
+}
+
+bool Handler::OnBeforePopup(
+    CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+    const CefString &target_url, const CefString &target_frame_name,
+    WindowOpenDisposition target_disposition, bool user_gesture,
+    const CefPopupFeatures &popupFeatures, CefWindowInfo &windowInfo,
+    CefRefPtr<CefClient> &client, CefBrowserSettings &settings,
+    CefRefPtr<CefDictionaryValue> &extra_info, bool *no_javascript_access) {
+  if (!target_url.empty()) {
+    setURL(target_url.ToString().c_str());
+  }
+
+  // Prevent pop-up, return true because we want to have a custom action
+  return true;
 }
 
 namespace {
@@ -90,15 +164,33 @@ bool Handler::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
 
   switch (cmd) {
   case HandlerCommand::unrecoverableError: {
-    char *out = nullptr;
     auto str = list->GetString(1);
-    asprintf(&out, "exception: %s", str.ToString().c_str());
-    fprintf(stdout, "%s\n", out);
-    fflush(stderr);
-    fflush(stdout);
-    free(out);
+    logs::print("JS exception: {}", str.ToString().c_str());
     break;
   }
+  case HandlerCommand::nav_back: {
+    navbar_interface::nav_back();
+    break;
+  }
+  case HandlerCommand::nav_forward: {
+    navbar_interface::nav_forward();
+    break;
+  }
+  case HandlerCommand::nav_refresh: {
+    navbar_interface::nav_refresh();
+    break;
+  }
+  case HandlerCommand::nav_new_window: {
+    logs::print("new_window TODO");
+    break;
+  }
+  case HandlerCommand::nav_set_url: {
+    if (list->GetSize() >= 1) {
+      auto str = list->GetString(1);
+      navbar_interface::nav_set_url(str.ToString().c_str());
+    }
+    break;
+  } break;
   }
   return false;
 }
@@ -108,8 +200,9 @@ CefRefPtr<CefProcessMessage> createMessage() {
   return msg;
 }
 
-void Handler::callJavascriptFunction(const CefRefPtr<CefBrowser> &browser,
-                                     const std::string &code) {
+void Handler::callJavascriptFunction(const std::string &code) {
+  if (!browser)
+    return;
   auto msg = createMessage();
   auto args = msg->GetArgumentList();
   args->SetInt(0, (int)RendererCommand::evalJavascript);
@@ -133,7 +226,7 @@ void Handler::LoadEndPerform(CefRefPtr<CefBrowser> browser,
 
 void Handler::OnLoadEnd(CefRefPtr<CefBrowser> browser,
                         CefRefPtr<CefFrame> frame, int httpStatusCode) {
-  fprintf(stderr, "Webpage load ended, status code %d\n", httpStatusCode);
+  logs::print("Webpage load ended, status code {}", httpStatusCode);
 
   CEF_REQUIRE_UI_THREAD();
 

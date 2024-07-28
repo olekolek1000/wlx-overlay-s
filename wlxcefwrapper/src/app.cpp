@@ -1,12 +1,12 @@
 #include "app.hpp"
 #include "handler.hpp"
+#include "logs.hpp"
 #include "render_handler.hpp"
+#include "util.hpp"
 #include <cassert>
 #include <filesystem>
 
-App::App(std::string_view url) : url(url) {
-  render_process_handler = new RenderProcessHandler();
-}
+App::App() { render_process_handler = new RenderProcessHandler(); }
 
 CefRefPtr<CefBrowserProcessHandler> App::GetBrowserProcessHandler() {
   return this;
@@ -18,22 +18,30 @@ CefRefPtr<CefRenderProcessHandler> App::GetRenderProcessHandler() {
 }
 
 void App::OnContextInitialized() {
-  assert(handler);
-
   CefWindowInfo window_info;
   window_info.SetAsWindowless(0);
-
-  CefString url = this->url;
 
   CefBrowserSettings settings;
   settings.windowless_frame_rate = 30;
 
-  assert(handler);
-  CefBrowserHost::CreateBrowser(window_info, handler, url, settings, {}, {});
+  auto path = util::getLibraryDir() + "/../assets/index.html";
+
+  CefBrowserHost::CreateBrowser(window_info, handler_navbar, "file://" + path,
+                                settings, {}, {});
+
+  CefBrowserHost::CreateBrowser(window_info, handler_content, "about:blank",
+                                settings, {}, {});
+
+  logs::print("Context and browser created");
 }
 
-CefRefPtr<CefClient> App::GetDefaultClient() { return handler; }
+CefRefPtr<CefClient> App::GetDefaultClient() {
+  return nullptr;
+  // return handler_content;
+}
 
-void App::setHandler(const CefRefPtr<Handler> &handler) {
-  this->handler = handler;
+void App::setHandlers(const CefRefPtr<Handler> &handler_navbar,
+                      const CefRefPtr<Handler> &handler_content) {
+  this->handler_navbar = handler_navbar;
+  this->handler_content = handler_content;
 }

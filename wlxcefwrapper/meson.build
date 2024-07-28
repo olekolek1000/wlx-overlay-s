@@ -1,4 +1,4 @@
-project('App', 'c', 'cpp', default_options : ['c_std=c11', 'cpp_std=c++17'])
+project('App', 'c', 'cpp', default_options : ['c_std=c11', 'cpp_std=c++20'])
 
 program_src_root = 'src/'
 
@@ -22,10 +22,16 @@ objs = [
 executable_src = [
 	program_src_root + 'whereami.c',
 	program_src_root + 'interface.cpp',
+	program_src_root + 'tab.cpp',
+	program_src_root + 'navbar_interface.cpp',
 	program_src_root + 'app.cpp',
 	program_src_root + 'handler.cpp',
+	program_src_root + 'util.cpp',
 	program_src_root + 'handler_sdl.cpp',
+	program_src_root + 'logs.cpp',
 	program_src_root + 'render_handler.cpp',
+	program_src_root + 'fmt/format.cc',
+	program_src_root + 'fmt/os.cc',
 ]
 
 executable_include = [

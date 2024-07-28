@@ -1,15 +1,24 @@
+#include "SDL_surface.h"
 #include "app.hpp"
+#include "fmt/format.h"
 #include "handler.hpp"
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
+#include "include/cef_parser.h"
 #include "include/internal/cef_string.h"
 #include "include/internal/cef_types.h"
 #include "include/internal/cef_types_wrappers.h"
+#include "interface_class.hpp"
+#include "logs.hpp"
+#include "tab.hpp"
+#include "util.hpp"
 #include "whereami.h"
 #include <cassert>
+#include <chrono>
 #include <filesystem>
 #include <queue>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 extern "C" {
@@ -18,34 +27,135 @@ extern "C" {
 
 static const uint32_t viewport_width = 1280;
 static const uint32_t viewport_height = 720;
+
+static const uint32_t navbar_width = viewport_width;
+static const uint32_t navbar_height = 48;
+
+static const uint32_t content_width = viewport_width;
+static const uint32_t content_height = 720 - navbar_height;
+
 static const bool debug_view_enabled = false;
-
-struct HandlerCell {
-  CefRefPtr<Handler> handler;
-
-  void init(CefRefPtr<App> &app);
-};
-
-struct Interface {
-  std::string error_msg;
-  CefRefPtr<App> app;
-  bool cef_started = false;
-
-  std::unordered_map<int, HandlerCell> handlers;
-  int getUnusedHandlerId() const;
-  void startCef();
-};
 
 Interface *interface = nullptr;
 
-static void setError(std::string_view str) { interface->error_msg = str; }
+void setError(std::string_view str) { interface->error_msg = str; }
 
-void HandlerCell::init(CefRefPtr<App> &app) {}
+SDL_Surface *TabCell::getCompositeSurface(bool render) {
+  if (!surf_composite) {
+    surf_composite = SDL_CreateRGBSurfaceWithFormat(
+        0, viewport_width, viewport_height, 0, SDL_PIXELFORMAT_ABGR8888);
+  }
+
+  if (render) {
+    auto *surf_navbar = handler_navbar->getSurface();
+    auto *surf_content = handler_content->getSurface();
+    if (!surf_navbar || !surf_content) {
+      setError("Handler surfaces not ready");
+      return nullptr;
+    }
+
+    SDL_Rect rect{};
+
+    // Blit navbar
+    SDL_BlitSurface(surf_navbar, nullptr, surf_composite, &rect);
+
+    // Blit content
+    rect.y += surf_navbar->h;
+    SDL_BlitSurface(surf_content, nullptr, surf_composite, &rect);
+  }
+
+  return surf_composite;
+}
+
+CefRefPtr<CefBrowser> TabCell::mapEvent(int x, int y, int &mapped_x,
+                                        int &mapped_y) {
+  last_mouse_x = x;
+  last_mouse_y = y;
+  if (y < (int)navbar_height) {
+    mapped_x = x;
+    mapped_y = y;
+    return handler_navbar->browser;
+  } else {
+    mapped_x = x;
+    mapped_y = y - (int)navbar_height;
+    return handler_content->browser;
+  }
+}
+
+void TabCell::passMouseMove(int x, int y) {
+  int mapped_x, mapped_y;
+  auto browser = mapEvent(x, y, mapped_x, mapped_y);
+  if (!browser) [[unlikely]] {
+    return;
+  }
+
+  if (auto host = browser->GetHost()) {
+    CefMouseEvent evt;
+    evt.x = mapped_x;
+    evt.y = mapped_y;
+    host->SendMouseMoveEvent(evt, false);
+  }
+}
+
+void TabCell::passMouseState(int index, bool down) {
+  int mapped_x, mapped_y;
+  auto browser = mapEvent(last_mouse_x, last_mouse_y, mapped_x, mapped_y);
+  if (!browser) [[unlikely]] {
+    return;
+  }
+
+  cef_mouse_button_type_t type;
+  switch (index) {
+  default: {
+    type = cef_mouse_button_type_t::MBT_LEFT;
+    break;
+  }
+  case 1: {
+    type = cef_mouse_button_type_t::MBT_MIDDLE;
+    break;
+  }
+  case 2: {
+    type = cef_mouse_button_type_t::MBT_RIGHT;
+    break;
+  }
+  }
+
+  if (auto host = browser->GetHost()) {
+    CefMouseEvent evt;
+    evt.x = mapped_x;
+    evt.y = mapped_y;
+    evt.modifiers = cef_event_flags_t::EVENTFLAG_LEFT_MOUSE_BUTTON;
+
+    host->SendMouseClickEvent(evt, type, !down, 1);
+  }
+}
+
+void TabCell::passMouseScroll(float delta) {
+  int mapped_x, mapped_y;
+  auto browser = mapEvent(last_mouse_x, last_mouse_y, mapped_x, mapped_y);
+  if (!browser) [[unlikely]] {
+    return;
+  }
+
+  if (auto host = browser->GetHost()) {
+    CefMouseEvent evt;
+    evt.x = last_mouse_x;
+    evt.y = last_mouse_y;
+    host->SendMouseWheelEvent(evt, 0, delta * 15);
+  }
+}
+
+TabCell::~TabCell() {
+  if (surf_composite) {
+    SDL_FreeSurface(surf_composite);
+    surf_composite = nullptr;
+  }
+}
 
 int Interface::getUnusedHandlerId() const {
   int unused_id = 0;
   while (true) {
-    if (handlers.find(unused_id) != handlers.end()) {
+    if (tabs.find(unused_id) != tabs.end()) {
       unused_id++;
       continue;
     }
@@ -55,28 +165,14 @@ int Interface::getUnusedHandlerId() const {
   return unused_id;
 }
 
-std::string getExecutablePath() {
-  std::string exec_path;
-  auto exec_path_len = wai_getModulePath(nullptr, 0, nullptr);
-  exec_path.resize(exec_path_len);
-  int dirname_length;
-  if (wai_getModulePath(exec_path.data(), exec_path_len, &dirname_length) ==
-      -1) {
-    fprintf(stderr, "Failed to get library exec path");
-    abort();
-  }
-  // printf("Lib path: %s\n", exec_path.c_str());
-  // fflush(stdout);
-  return exec_path;
-}
-
 CefSettings getSettings() {
   CefSettings settings;
   settings.log_severity = LOGSEVERITY_ERROR;
   settings.multi_threaded_message_loop = false;
   settings.windowless_rendering_enabled = true;
   settings.no_sandbox = true;
-  CefString(&settings.browser_subprocess_path).FromString(getExecutablePath());
+  CefString(&settings.browser_subprocess_path)
+      .FromString(util::getLibraryPath());
 
   const auto cache_path = std::filesystem::absolute("./cef_cache").string();
   std::filesystem::create_directories(cache_path);
@@ -91,63 +187,24 @@ void Interface::startCef() {
   }
   cef_started = true;
 
-  auto path = getExecutablePath();
+  auto path = util::getLibraryPath();
 
-  const char *argv[] = {path.c_str(), "--no-sandbox", "--disable-gpu",
+  const char *argv[] = {path.c_str(), "--disable-gpu", "--no-sandbox",
                         "--single-process", nullptr};
 
   CefMainArgs main_args(4, (char **)argv);
   auto settings = getSettings();
 
-  fprintf(stderr, "Initializing CEF\n");
-  fflush(stderr);
+  logs::print("Calling CefInitialize");
   CefInitialize(main_args, settings, interface->app.get(), nullptr);
-
-  fprintf(stderr, "Running CEF message loop\n");
-  fflush(stderr);
 
   // this function is blocking, wlxcef_tick_message_loop is being used instead
   // CefRunMessageLoop();
 }
 
 void initApp() {
-  fprintf(stderr, "Starting app\n");
-  std::string_view url = "https://github.com/galister/wlx-overlay-s";
-  interface->app = new App(url);
-}
-
-CefRefPtr<Handler> getHandler(int id) {
-  auto it = interface->handlers.find(id);
-  if (it == interface->handlers.end()) {
-    setError("Handler not found");
-    return {};
-  }
-
-  return it->second.handler;
-}
-
-CefRefPtr<CefBrowser> getBrowser(CefRefPtr<Handler> handler) {
-  if (!handler || !handler->browser) {
-    setError("Browser is not yet set");
-    return {};
-  }
-
-  return handler->browser;
-}
-
-CefRefPtr<CefBrowser> getBrowser(int handler_id) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
-    return {};
-  }
-
-  auto browser = handler->browser;
-  if (!browser) {
-    setError("Browser is not yet set");
-    return {};
-  }
-
-  return browser;
+  logs::print("Allocating");
+  interface->app = new App();
 }
 
 extern "C" {
@@ -163,7 +220,7 @@ int main(int argc, char **argv) {
 
   initApp();
 
-  fprintf(stderr, "Executing process\n");
+  logs::print("Calling CefExecuteProcess");
   int exit_code = CefExecuteProcess(main_args, interface->app.get(), nullptr);
   if (exit_code >= 0) {
     return exit_code;
@@ -195,148 +252,140 @@ int wlxcef_free() {
   return 0;
 }
 
+int wlxcef_set_url(int tab_id, const char *url) {
+  auto handler = getHandler(tab_id);
+  if (!handler) {
+    return -1;
+  }
+
+  if (!handler->setURL(url)) {
+    setError("setURL failed");
+    return -1;
+  }
+
+  return 0;
+}
+
 int wlxcef_create_tab() {
-  if (!interface->handlers.empty()) {
+  if (!interface->tabs.empty()) {
     setError("multiple handlers not supported yet");
     return -1;
   }
 
-  const auto handler_id = interface->getUnusedHandlerId();
+  const auto tab_id = interface->getUnusedHandlerId();
 
   initApp();
 
-  fprintf(stderr, "Creating handler ID %d\n", handler_id);
-  fflush(stderr);
-  CefRefPtr<Handler> handler(new Handler(interface->app.get(), viewport_width,
-                                         viewport_height, debug_view_enabled));
-  interface->app->setHandler(handler);
+  logs::print("Creating handler ID {}", tab_id);
 
-  auto &cell = interface->handlers[handler_id];
-  cell.handler = handler;
+  CefRefPtr<Handler> handler_navbar(new Handler(
+      interface->app.get(), navbar_width, navbar_height, debug_view_enabled));
+
+  CefRefPtr<Handler> handler_content(new Handler(
+      interface->app.get(), content_width, content_height, debug_view_enabled));
+  handler_content->setCallbackAddressChange([handler_navbar](std::string url) {
+    handler_navbar->callJavascriptFunction(fmt::format(
+        "wlxcef_change_url(\"{}\")", CefURIEncode(url, true).ToString()));
+  });
+
+  interface->app->setHandlers(handler_navbar, handler_content);
+
+  auto &cell = interface->tabs[tab_id];
+  cell.handler_navbar = handler_navbar;
+  cell.handler_content = handler_content;
 
   interface->startCef();
 
-  return handler_id;
+  return tab_id;
 }
 
-int wlxcef_free_tab(int handler_id) {
-  auto handler = getHandler(handler_id);
+int wlxcef_is_ready(int tab_id) {
+  wlxcef_tick_message_loop();
+  auto handler = getHandler(tab_id);
   if (!handler) {
     return -1;
   }
 
-  interface->handlers.erase(interface->handlers.find(handler_id));
+  return handler->browser != nullptr;
+}
+
+int wlxcef_free_tab(int tab_id) {
+  auto handler = getHandler(tab_id);
+  if (!handler) {
+    return -1;
+  }
+
+  interface->tabs.erase(interface->tabs.find(tab_id));
   return 0;
 }
 
-int wlxcef_get_viewport_width(int handler_id) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+int wlxcef_get_viewport_width(int tab_id) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
     return -1;
   }
-  return handler->getViewportWidth();
-}
-int wlxcef_get_viewport_height(int handler_id) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+  auto *surface = tab->getCompositeSurface(false);
+  if (!surface) {
     return -1;
   }
-  return handler->getViewportHeight();
+
+  return surface->w;
 }
-const void *wlxcef_get_viewport_data_rgba(int handler_id) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+
+int wlxcef_get_viewport_height(int tab_id) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
+    return -1;
+  }
+  auto *surface = tab->getCompositeSurface(false);
+  if (!surface) {
+    return -1;
+  }
+
+  return surface->h;
+}
+
+const void *wlxcef_get_viewport_data_rgba(int tab_id) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
     return nullptr;
   }
 
-  auto *surf = handler->getViewportSurfaceRGBA();
-  if (!surf) {
-    setError("Surface is not yet available");
+  auto *surface = tab->getCompositeSurface(true);
+  if (!surface) {
     return nullptr;
   }
-  return surf->pixels;
+
+  return surface->pixels;
 }
 
-int wlxcef_mouse_move(int handler_id, int x, int y) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+int wlxcef_mouse_move(int tab_id, int x, int y) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
     return -1;
   }
 
-  auto browser = getBrowser(handler);
-  if (!browser) {
-    return -1;
-  }
-
-  if (auto host = browser->GetHost()) {
-    CefMouseEvent evt;
-    evt.x = x;
-    evt.y = y;
-    handler->last_mouse_x = x;
-    handler->last_mouse_y = y;
-    host->SendMouseMoveEvent(evt, false);
-  }
-
+  tab->passMouseMove(x, y);
   return 0;
 }
 
-int wlxcef_mouse_set_state(int handler_id, int index, int down) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+int wlxcef_mouse_set_state(int tab_id, int index, int down) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
     return -1;
   }
 
-  auto browser = getBrowser(handler);
-  if (!browser) {
-    return -1;
-  }
-
-  cef_mouse_button_type_t type;
-  switch (index) {
-  default: {
-    type = cef_mouse_button_type_t::MBT_LEFT;
-    break;
-  }
-  case 1: {
-    type = cef_mouse_button_type_t::MBT_MIDDLE;
-    break;
-  }
-  case 2: {
-    type = cef_mouse_button_type_t::MBT_RIGHT;
-    break;
-  }
-  }
-
-  if (auto host = browser->GetHost()) {
-    CefMouseEvent evt;
-    evt.x = handler->last_mouse_x;
-    evt.y = handler->last_mouse_y;
-    evt.modifiers = cef_event_flags_t::EVENTFLAG_LEFT_MOUSE_BUTTON;
-
-    host->SendMouseClickEvent(evt, type, !down, 1);
-  }
-
+  tab->passMouseState(index, down == 1);
   return 0;
 }
 
-int wlxcef_mouse_scroll(int handler_id, float delta) {
-  auto handler = getHandler(handler_id);
-  if (!handler) {
+int wlxcef_mouse_scroll(int tab_id, float delta) {
+  auto tab = getTabCell(tab_id);
+  if (!tab) {
     return -1;
   }
 
-  auto browser = getBrowser(handler);
-  if (!browser) {
-    return -1;
-  }
-
-  if (auto host = browser->GetHost()) {
-    CefMouseEvent evt;
-    evt.x = handler->last_mouse_x;
-    evt.y = handler->last_mouse_y;
-    host->SendMouseWheelEvent(evt, 0, delta * 10);
-  }
-
+  tab->passMouseScroll(delta);
   return 0;
 }
 }
