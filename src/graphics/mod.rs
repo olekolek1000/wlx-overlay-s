@@ -553,7 +553,9 @@ impl WlxGraphics {
         Arc<winit::window::Window>,
         Arc<vulkano::swapchain::Surface>,
     )> {
-        use vulkano::swapchain::Surface;
+        use vulkano::{
+            device::physical::PhysicalDeviceType, instance::InstanceCreateFlags, swapchain::Surface,
+        };
         use winit::{event_loop::EventLoop, window::Window};
 
         let event_loop = EventLoop::new().unwrap(); // want panic

@@ -17,6 +17,7 @@ use crate::{
         keyboard::create_keyboard,
         screen::WlxClientAlias,
         watch::{create_watch, WATCH_NAME},
+        wayvr::create_wayvr,
     },
     state::AppState,
 };
@@ -113,6 +114,10 @@ where
         let mut watch = create_watch::<T>(app)?;
         watch.state.want_visible = true;
         overlays.insert(watch.state.id, watch);
+
+        let mut wayvr = create_wayvr::<T>(app, 1280, 720)?;
+        wayvr.state.want_visible = true;
+        overlays.insert(wayvr.state.id, wayvr);
 
         let mut keyboard = create_keyboard(app, keymap)?;
         keyboard.state.show_hide = true;
