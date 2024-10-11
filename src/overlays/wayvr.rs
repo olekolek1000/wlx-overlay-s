@@ -2,8 +2,9 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use ::wayvr::wayvr::DMAbufData;
 use glam::{vec2, vec3a, Affine2, Vec2};
+use vulkano::image::SubresourceLayout;
 use wayvr::wayvr;
-use wlx_capture::frame::{DmabufFrame, FourCC, FrameFormat, FramePlane, DRM_FORMAT_ARGB8888};
+use wlx_capture::frame::{DmabufFrame, FourCC, FrameFormat, FramePlane};
 
 use crate::{
     backend::{
@@ -119,19 +120,46 @@ impl WayVRRenderer {
             planes[0].offset = data.offset as u32;
             planes[0].stride = data.stride;
 
+            // Filter out modifiers (TODO)
+            /*for modifier in &data.modifiers {
+                log::info!("modifier {:#x}", modifier);
+
+                let info = ash::vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::builder()
+                    .drm_format_modifier(*modifier)
+                    .sharing_mode(ash::vk::SharingMode::EXCLUSIVE)
+                    .build();
+
+                // TODO
+                //get_physical_device_image_format_properties2();
+            }*/
+
             let frame = DmabufFrame {
                 format: FrameFormat {
                     width: self.width,
                     height: self.height,
                     fourcc: FourCC {
-                        value: wlx_capture::frame::DRM_FORMAT_ABGR8888,
+                        value: data.fourcc as u32,
                     },
-                    modifier: 0,
+                    modifier: data.modifiers[4],
                 },
                 num_planes: 1,
                 planes,
             };
-            let tex = self.graphics.dmabuf_texture(frame)?;
+
+            let layouts: Vec<SubresourceLayout> = vec![SubresourceLayout {
+                offset: data.offset as _,
+                size: 0,
+                row_pitch: data.stride as _,
+                array_pitch: None,
+                depth_pitch: None,
+            }];
+
+            let tex = self.graphics.dmabuf_texture_ex(
+                frame,
+                vulkano::image::ImageTiling::DrmFormatModifier,
+                layouts,
+                data.modifiers,
+            )?;
             self.dmabuf_image = Some(tex.clone());
             self.view = Some(vulkano::image::view::ImageView::new_default(tex).unwrap());
         }
