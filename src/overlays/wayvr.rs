@@ -1,8 +1,12 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use ::wayvr::wayvr::DMAbufData;
+use ash::vk::{self, Format, Handle as _};
 use glam::{vec2, vec3a, Affine2, Vec2};
-use vulkano::image::SubresourceLayout;
+use vulkano::{
+    image::{ImageDrmFormatModifierInfo, ImageFormatInfo, ImageUsage, SubresourceLayout},
+    Handle, VulkanObject,
+};
 use wayvr::wayvr;
 use wlx_capture::frame::{DmabufFrame, FourCC, FrameFormat, FramePlane};
 
@@ -23,7 +27,21 @@ impl WayVRContext {
     pub fn new(width: u32, height: u32) -> anyhow::Result<Self> {
         let mut wayvr = wayvr::WayVR::new(width, height)?;
 
-        wayvr.spawn_process("konsole", vec![String::from("-e"), String::from("htop")])?;
+        //wayvr.spawn_process("thunar", vec![""], vec![])?;
+        //wayvr.spawn_process("kcalc", vec![], vec![])?;
+        //wayvr.spawn_process("weston-smoke", vec![], vec![])?;
+        wayvr.spawn_process(
+            "cage",
+            vec![
+                "chromium",
+                "--",
+                "--incognito",
+                "--ozone-platform=wayland",
+                "--start-maximized",
+                "https://www.shadertoy.com/",
+            ],
+            vec![],
+        )?;
 
         Ok(Self { wayvr })
     }
@@ -120,18 +138,27 @@ impl WayVRRenderer {
             planes[0].offset = data.offset as u32;
             planes[0].stride = data.stride;
 
-            // Filter out modifiers (TODO)
-            /*for modifier in &data.modifiers {
-                log::info!("modifier {:#x}", modifier);
-
-                let info = ash::vk::PhysicalDeviceImageDrmFormatModifierInfoEXT::builder()
-                    .drm_format_modifier(*modifier)
-                    .sharing_mode(ash::vk::SharingMode::EXCLUSIVE)
-                    .build();
-
-                // TODO
-                //get_physical_device_image_format_properties2();
-            }*/
+            /*
+            // for debug
+                let props = self
+                    .graphics
+                    .device
+                    .physical_device()
+                    .image_format_properties(ImageFormatInfo {
+                        drm_format_modifier_info: Some(ImageDrmFormatModifierInfo {
+                            drm_format_modifier: *modifier,
+                            sharing: vulkano::sync::Sharing::Exclusive,
+                            ..Default::default()
+                        }),
+                        usage: ImageUsage::SAMPLED,
+                        format: vulkano::format::Format::B8G8R8A8_UNORM,
+                        external_memory_handle_type: Some(
+                            vulkano::memory::ExternalMemoryHandleType::DmaBuf,
+                        ),
+                        tiling: vulkano::image::ImageTiling::DrmFormatModifier,
+                        ..Default::default()
+                    })?;
+             */
 
             let frame = DmabufFrame {
                 format: FrameFormat {
@@ -140,7 +167,7 @@ impl WayVRRenderer {
                     fourcc: FourCC {
                         value: data.fourcc as u32,
                     },
-                    modifier: data.modifiers[4],
+                    modifier: data.modifiers[0],
                 },
                 num_planes: 1,
                 planes,
