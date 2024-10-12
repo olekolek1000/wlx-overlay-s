@@ -4496,7 +4496,7 @@ dependencies = [
 [[package]]
 name = "wayvr"
 version = "0.1.0"
-source = "git+https://github.com/olekolek1000/wayvr.git#b769a2c7cda2376926eb6529a1852762c589ed62"
+source = "git+https://github.com/olekolek1000/wayvr.git?rev=a3743686fa29a21521e884fdf0c199e43039df21#a3743686fa29a21521e884fdf0c199e43039df21"
 dependencies = [
  "anyhow",
  "glow",
