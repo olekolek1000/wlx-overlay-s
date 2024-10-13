@@ -1,12 +1,6 @@
-use std::{cell::RefCell, rc::Rc, sync::Arc};
-
-use ::wayvr::wayvr::DMAbufData;
-use ash::vk::{self, Format, Handle as _};
 use glam::{vec2, vec3a, Affine2, Vec2};
-use vulkano::{
-    image::{ImageDrmFormatModifierInfo, ImageFormatInfo, ImageUsage, SubresourceLayout},
-    Handle, VulkanObject,
-};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+use vulkano::image::SubresourceLayout;
 use wayvr::wayvr;
 use wlx_capture::frame::{DmabufFrame, FourCC, FrameFormat, FramePlane};
 
@@ -130,7 +124,7 @@ impl WayVRRenderer {
 }
 
 impl WayVRRenderer {
-    fn ensure_dmabuf(&mut self, data: DMAbufData) -> anyhow::Result<()> {
+    fn ensure_dmabuf(&mut self, data: wayvr::egl_data::DMAbufData) -> anyhow::Result<()> {
         if self.dmabuf_image.is_none() {
             // First init
             let mut planes = [FramePlane::default(); 4];
@@ -138,36 +132,14 @@ impl WayVRRenderer {
             planes[0].offset = data.offset as u32;
             planes[0].stride = data.stride;
 
-            /*
-            // for debug
-                let props = self
-                    .graphics
-                    .device
-                    .physical_device()
-                    .image_format_properties(ImageFormatInfo {
-                        drm_format_modifier_info: Some(ImageDrmFormatModifierInfo {
-                            drm_format_modifier: *modifier,
-                            sharing: vulkano::sync::Sharing::Exclusive,
-                            ..Default::default()
-                        }),
-                        usage: ImageUsage::SAMPLED,
-                        format: vulkano::format::Format::B8G8R8A8_UNORM,
-                        external_memory_handle_type: Some(
-                            vulkano::memory::ExternalMemoryHandleType::DmaBuf,
-                        ),
-                        tiling: vulkano::image::ImageTiling::DrmFormatModifier,
-                        ..Default::default()
-                    })?;
-             */
-
             let frame = DmabufFrame {
                 format: FrameFormat {
                     width: self.width,
                     height: self.height,
                     fourcc: FourCC {
-                        value: data.fourcc as u32,
+                        value: data.mod_info.fourcc,
                     },
-                    modifier: data.modifiers[0],
+                    modifier: data.mod_info.modifiers[0], /* possibly not proper? */
                 },
                 num_planes: 1,
                 planes,
@@ -185,7 +157,7 @@ impl WayVRRenderer {
                 frame,
                 vulkano::image::ImageTiling::DrmFormatModifier,
                 layouts,
-                data.modifiers,
+                data.mod_info.modifiers,
             )?;
             self.dmabuf_image = Some(tex.clone());
             self.view = Some(vulkano::image::view::ImageView::new_default(tex).unwrap());
