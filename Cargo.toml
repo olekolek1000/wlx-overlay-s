@@ -68,7 +68,7 @@ xcb = { version = "1.4.0", optional = true, features = [
 image_dds = { version = "0.6.0", default-features = false, features = [
   "ddsfile",
 ] }
-wayvr = { git = "https://github.com/olekolek1000/wayvr.git", rev = "a3743686fa29a21521e884fdf0c199e43039df21", optional = true }
+wayvr = { git = "https://github.com/olekolek1000/wayvr.git", rev = "4640810ddec3313fb3d7ac72e989905f4754f3be", optional = true }
 mint = "0.5.9"
 
 [build-dependencies]
