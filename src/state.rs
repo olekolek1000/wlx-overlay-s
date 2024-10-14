@@ -1,12 +1,17 @@
-use std::{io::Cursor, sync::Arc};
-
 use anyhow::bail;
 use glam::Affine3A;
 use idmap::IdMap;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Source};
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
+use std::{io::Cursor, sync::Arc};
 use vulkano::image::view::ImageView;
+
+#[cfg(feature = "wayvr")]
+use std::{cell::RefCell, rc::Rc};
+
+#[cfg(feature = "wayvr")]
+use wayvr::wayvr::WayVR;
 
 use crate::{
     backend::{input::InputState, task::TaskContainer},
@@ -33,6 +38,9 @@ pub struct AppState {
     pub screens: SmallVec<[ScreenMeta; 8]>,
     pub anchor: Affine3A,
     pub sprites: AStrMap<Arc<ImageView>>,
+
+    #[cfg(feature = "wayvr")]
+    pub wayvr: Option<Rc<RefCell<WayVR>>>, // Dynamically created if requested
 }
 
 impl AppState {
@@ -84,7 +92,22 @@ impl AppState {
             screens: smallvec![],
             anchor: Affine3A::IDENTITY,
             sprites: AStrMap::new(),
+
+            #[cfg(feature = "wayvr")]
+            wayvr: None,
         })
+    }
+
+    #[cfg(feature = "wayvr")]
+    pub fn get_wayvr(&mut self) -> anyhow::Result<Rc<RefCell<WayVR>>> {
+        if let Some(wvr) = &self.wayvr {
+            Ok(wvr.clone())
+        } else {
+            log::info!("Initializing WayVR");
+            let wayvr = Rc::new(RefCell::new(WayVR::new()?));
+            self.wayvr = Some(wayvr.clone());
+            Ok(wayvr)
+        }
     }
 }
 
