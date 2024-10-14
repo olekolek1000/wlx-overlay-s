@@ -1,3 +1,4 @@
+use ::wayvr::display::DisplayHandle;
 use glam::{vec2, vec3a, Affine2, Vec2};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use vulkano::image::SubresourceLayout;
@@ -14,30 +15,36 @@ use crate::{
 };
 
 pub struct WayVRContext {
-    wayvr: wayvr::WayVR,
+    wayvr: Rc<RefCell<wayvr::WayVR>>,
+    display: DisplayHandle,
+}
+
+#[derive(Default)]
+pub struct WayVRProcess<'a> {
+    pub exec_path: &'a str,
+    pub args: &'a [&'a str],
+    pub env: &'a [(&'a str, &'a str)],
 }
 
 impl WayVRContext {
-    pub fn new(width: u32, height: u32) -> anyhow::Result<Self> {
-        let mut wayvr = wayvr::WayVR::new(width, height)?;
+    pub fn new(
+        wvr: Rc<RefCell<wayvr::WayVR>>,
+        width: u32,
+        height: u32,
+        processes: &[WayVRProcess],
+    ) -> anyhow::Result<Self> {
+        let mut wayvr = wvr.borrow_mut();
 
-        //wayvr.spawn_process("thunar", vec![""], vec![])?;
-        //wayvr.spawn_process("kcalc", vec![], vec![])?;
-        //wayvr.spawn_process("weston-smoke", vec![], vec![])?;
-        wayvr.spawn_process(
-            "cage",
-            vec![
-                "chromium",
-                "--",
-                "--incognito",
-                "--ozone-platform=wayland",
-                "--start-maximized",
-                "https://www.shadertoy.com/",
-            ],
-            vec![],
-        )?;
+        let display = wayvr.create_display(width, height)?;
 
-        Ok(Self { wayvr })
+        for process in processes {
+            wayvr.spawn_process(display, process.exec_path, process.args, process.env)?;
+        }
+
+        Ok(Self {
+            wayvr: wvr.clone(),
+            display,
+        })
     }
 }
 
@@ -61,13 +68,14 @@ impl InteractionHandler for WayVRInteractionHandler {
         _app: &mut state::AppState,
         hit: &input::PointerHit,
     ) -> Option<input::Haptics> {
-        let mut ctx = self.context.borrow_mut();
-
         let pos = self.mouse_transform.transform_point2(hit.uv);
         let x = (pos.x as i32).max(0);
         let y = (pos.y as i32).max(0);
 
-        ctx.wayvr.send_mouse_move(x as u32, y as u32);
+        let ctx = self.context.borrow();
+        ctx.wayvr
+            .borrow_mut()
+            .send_mouse_move(ctx.display, x as u32, y as u32);
 
         None
     }
@@ -86,18 +94,19 @@ impl InteractionHandler for WayVRInteractionHandler {
                 None
             }
         } {
-            let mut ctx = self.context.borrow_mut();
+            let ctx = self.context.borrow();
+            let mut wayvr = ctx.wayvr.borrow_mut();
             if pressed {
-                ctx.wayvr.send_mouse_down(index);
+                wayvr.send_mouse_down(ctx.display, index);
             } else {
-                ctx.wayvr.send_mouse_up(index);
+                wayvr.send_mouse_up(ctx.display, index);
             }
         }
     }
 
     fn on_scroll(&mut self, _app: &mut state::AppState, _hit: &input::PointerHit, delta: f32) {
-        let mut ctx = self.context.borrow_mut();
-        ctx.wayvr.send_mouse_scroll(delta);
+        let ctx = self.context.borrow();
+        ctx.wayvr.borrow_mut().send_mouse_scroll(ctx.display, delta);
     }
 }
 
@@ -111,9 +120,17 @@ pub struct WayVRRenderer {
 }
 
 impl WayVRRenderer {
-    pub fn new(app: &mut state::AppState, width: u32, height: u32) -> anyhow::Result<Self> {
+    pub fn new(
+        app: &mut state::AppState,
+        wvr: Rc<RefCell<wayvr::WayVR>>,
+        width: u32,
+        height: u32,
+        processes: &[WayVRProcess],
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            context: Rc::new(RefCell::new(WayVRContext::new(width, height)?)),
+            context: Rc::new(RefCell::new(WayVRContext::new(
+                wvr, width, height, processes,
+            )?)),
             width,
             height,
             dmabuf_image: None,
@@ -181,11 +198,17 @@ impl OverlayRenderer for WayVRRenderer {
     }
 
     fn render(&mut self, _app: &mut state::AppState) -> anyhow::Result<()> {
-        let mut ctx = self.context.borrow_mut();
-        // Process, tick and render Wayland message loop
-        ctx.wayvr.tick()?;
+        let ctx = self.context.borrow();
+        let mut wayvr = ctx.wayvr.borrow_mut();
 
-        let dmabuf_data = ctx.wayvr.get_dmabuf_data();
+        wayvr.tick_display(ctx.display)?;
+
+        let dmabuf_data = wayvr
+            .get_dmabuf_data(ctx.display)
+            .ok_or(anyhow::anyhow!("Failed to fetch dmabuf data"))?
+            .clone();
+
+        drop(wayvr);
         drop(ctx);
         self.ensure_dmabuf(dmabuf_data.clone())?;
 
@@ -205,6 +228,7 @@ pub fn create_wayvr<O>(
     app: &mut state::AppState,
     width: u32,
     height: u32,
+    processes: &[WayVRProcess],
 ) -> anyhow::Result<OverlayData<O>>
 where
     O: Default,
@@ -219,7 +243,7 @@ where
     );
 
     let state = OverlayState {
-        name: "WayVR".into(),
+        name: format!("WayVR Screen ({}x{})", width, height).into(),
         want_visible: true,
         interactable: true,
         recenter: true,
@@ -231,7 +255,9 @@ where
         ..Default::default()
     };
 
-    let renderer = WayVRRenderer::new(app, width, height)?;
+    let wayvr = app.get_wayvr()?;
+
+    let renderer = WayVRRenderer::new(app, wayvr, width, height, processes)?;
     let context = renderer.context.clone();
 
     let backend = Box::new(SplitOverlayBackend {

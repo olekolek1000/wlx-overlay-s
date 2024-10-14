@@ -481,7 +481,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "903e016de6be8ef8eb1bdc71b0f7988519c057281a762f9ecb57e0d8a145e03c"
 dependencies = [
  "autocxx-engine",
- "env_logger 0.9.3",
+ "env_logger",
  "indexmap 1.9.3",
  "syn 2.0.72",
 ]
@@ -1302,7 +1302,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330c60081dcc4c72131f8eb70510f1ac07223e5d4163db481a04a0befcffa412"
 dependencies = [
- "libloading 0.7.4",
+ "libloading 0.8.5",
 ]
 
 [[package]]
@@ -1443,19 +1443,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "env_logger"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cd405aab171cb85d6735e5c8d9db038c17d3ca007a4d2c25f337935c3d90580"
-dependencies = [
- "humantime",
- "is-terminal",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1518,6 +1505,19 @@ checksum = "cca927478b3747ba47f98af6ba0ac0daea4f12d12f55e9104071b3dc00276310"
 dependencies = [
  "chrono",
  "glob",
+ "log",
+ "nu-ansi-term",
+ "regex",
+ "thiserror",
+]
+
+[[package]]
+name = "flexi_logger"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "719236bdbcf6033a3395165f797076b31056018e6723ccff616eb25fc9c99de1"
+dependencies = [
+ "chrono",
  "log",
  "nu-ansi-term",
  "regex",
@@ -1987,17 +1987,6 @@ name = "io-lifetimes"
 version = "2.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a611371471e98973dbcab4e0ec66c31a10bc356eeb4d54a0e05eac8158fe38c"
-
-[[package]]
-name = "is-terminal"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "261f68e344040fbd0edea105bef17c66edf46f984ddb1115b775ce31be948f4b"
-dependencies = [
- "hermit-abi 0.4.0",
- "libc",
- "windows-sys 0.52.0",
-]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -3192,16 +3181,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty_env_logger"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "865724d4dbe39d9f3dd3b52b88d859d66bcb2d6a0acfd5ea68a65fb66d4bdc1c"
-dependencies = [
- "env_logger 0.10.2",
- "log",
-]
-
-[[package]]
 name = "prettyplease"
 version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4189,6 +4168,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81dfa00651efa65069b0b6b651f4aaa31ba9e3c3ce0137aaad053604ee7e0314"
+dependencies = [
+ "getrandom",
+ "rand",
+]
+
+[[package]]
 name = "version-compare"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4496,15 +4485,16 @@ dependencies = [
 [[package]]
 name = "wayvr"
 version = "0.1.0"
-source = "git+https://github.com/olekolek1000/wayvr.git?rev=a3743686fa29a21521e884fdf0c199e43039df21#a3743686fa29a21521e884fdf0c199e43039df21"
+source = "git+https://github.com/olekolek1000/wayvr.git?rev=39a29f32afec54149034230e73c24b93c7bbc187#39a29f32afec54149034230e73c24b93c7bbc187"
 dependencies = [
  "anyhow",
+ "flexi_logger 0.29.3",
  "glow",
  "khronos-egl",
  "log",
  "nalgebra-glm",
- "pretty_env_logger",
  "smithay",
+ "uuid",
  "wayland-client",
  "wayland-egl",
 ]
@@ -4953,7 +4943,7 @@ dependencies = [
  "cstr",
  "ctrlc",
  "dbus",
- "flexi_logger",
+ "flexi_logger 0.28.5",
  "fontconfig-rs",
  "freetype-rs",
  "futures",
