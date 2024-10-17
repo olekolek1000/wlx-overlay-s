@@ -8,7 +8,7 @@ use wlx_capture::frame::{DmabufFrame, FourCC, FrameFormat, FramePlane};
 use crate::{
     backend::{
         input::{self, InteractionHandler},
-        overlay::{OverlayData, OverlayRenderer, OverlayState, SplitOverlayBackend},
+        overlay::{ui_transform, OverlayData, OverlayRenderer, OverlayState, SplitOverlayBackend},
     },
     graphics::WlxGraphics,
     state,
@@ -17,6 +17,8 @@ use crate::{
 pub struct WayVRContext {
     wayvr: Rc<RefCell<wayvr::WayVR>>,
     display: DisplayHandle,
+    width: u32,
+    height: u32,
 }
 
 #[derive(Default)]
@@ -44,6 +46,8 @@ impl WayVRContext {
         Ok(Self {
             wayvr: wvr.clone(),
             display,
+            width,
+            height,
         })
     }
 }
@@ -68,9 +72,11 @@ impl InteractionHandler for WayVRInteractionHandler {
         _app: &mut state::AppState,
         hit: &input::PointerHit,
     ) -> Option<input::Haptics> {
+        let ctx = self.context.borrow();
+
         let pos = self.mouse_transform.transform_point2(hit.uv);
-        let x = (pos.x as i32).max(0);
-        let y = (pos.y as i32).max(0);
+        let x = ((pos.x * ctx.width as f32) as i32).max(0);
+        let y = ((pos.y * ctx.height as f32) as i32).max(0);
 
         let ctx = self.context.borrow();
         ctx.wayvr
@@ -233,14 +239,7 @@ pub fn create_wayvr<O>(
 where
     O: Default,
 {
-    let center = Vec2 { x: 0.5, y: 0.5 };
-    let aspect = width as f32 / height as f32;
-    let interaction_transform = Affine2::from_cols(Vec2::X, Vec2::NEG_Y * aspect, center);
-    let mouse_transform = Affine2::from_cols(
-        vec2(width as f32, 0.),
-        vec2(0., height as f32),
-        vec2(0.0, 0.0),
-    );
+    let transform = ui_transform(&[width, height]);
 
     let state = OverlayState {
         name: format!("WayVR Screen ({}x{})", width, height).into(),
@@ -248,10 +247,9 @@ where
         interactable: true,
         recenter: true,
         grabbable: true,
-        z_order: 100,
-        spawn_scale: 2.0,
+        spawn_scale: 1.0,
         spawn_point: vec3a(0.0, -0.5, 0.0),
-        interaction_transform,
+        interaction_transform: transform,
         ..Default::default()
     };
 
@@ -262,7 +260,7 @@ where
 
     let backend = Box::new(SplitOverlayBackend {
         renderer: Box::new(renderer),
-        interaction: Box::new(WayVRInteractionHandler::new(context, mouse_transform)),
+        interaction: Box::new(WayVRInteractionHandler::new(context, Affine2::IDENTITY)),
     });
 
     Ok(OverlayData {
