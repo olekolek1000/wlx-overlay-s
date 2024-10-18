@@ -156,6 +156,45 @@ where
             );
         }
 
+        #[cfg(feature = "wayvr")]
+        {
+            // helper function
+            let mut insert =
+                |width: u32, height: u32, proc: &[WayVRProcess]| -> anyhow::Result<()> {
+                    let mut wayvr = create_wayvr::<T>(app, width, height, proc)?;
+                    wayvr.state.want_visible = true;
+                    overlays.insert(wayvr.state.id, wayvr);
+                    Ok(())
+                };
+
+            let _ = insert(
+                800,
+                600,
+                &[WayVRProcess {
+                    exec_path: "konsole",
+                    args: &["-e", "htop"],
+                    env: &[],
+                }],
+            );
+
+            let _ = insert(
+                1280,
+                720,
+                &[WayVRProcess {
+                    exec_path: "cage",
+                    args: &[
+                        "chromium",
+                        "--",
+                        "--incognito",
+                        "--ozone-platform=wayland",
+                        "--start-maximized",
+                        "https://duckduckgo.com",
+                    ],
+                    env: &[],
+                }],
+            );
+        }
+
         let mut keyboard = create_keyboard(app, keymap)?;
         keyboard.state.show_hide = true;
         keyboard.state.want_visible = false;
