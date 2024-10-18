@@ -4485,7 +4485,7 @@ dependencies = [
 [[package]]
 name = "wayvr"
 version = "0.1.0"
-source = "git+https://github.com/olekolek1000/wayvr.git?rev=39a29f32afec54149034230e73c24b93c7bbc187#39a29f32afec54149034230e73c24b93c7bbc187"
+source = "git+https://github.com/olekolek1000/wayvr.git?rev=61b06a27ca5c858625c22654d653ed65906ffca9#61b06a27ca5c858625c22654d653ed65906ffca9"
 dependencies = [
  "anyhow",
  "flexi_logger 0.29.3",

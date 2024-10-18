@@ -27,6 +27,14 @@ use crate::{
     },
 };
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum KeyboardFocus {
+    PhysicalScreen,
+
+    #[allow(dead_code)] // Not available if "wayvr" feature is disabled
+    WayVR, // (for now without wayland window id data, it's handled internally),
+}
+
 pub struct AppState {
     pub fc: FontCache,
     pub session: AppSession,
@@ -38,6 +46,7 @@ pub struct AppState {
     pub screens: SmallVec<[ScreenMeta; 8]>,
     pub anchor: Affine3A,
     pub sprites: AStrMap<Arc<ImageView>>,
+    pub keyboard_focus: KeyboardFocus,
 
     #[cfg(feature = "wayvr")]
     pub wayvr: Option<Rc<RefCell<WayVR>>>, // Dynamically created if requested
@@ -92,6 +101,7 @@ impl AppState {
             screens: smallvec![],
             anchor: Affine3A::IDENTITY,
             sprites: AStrMap::new(),
+            keyboard_focus: KeyboardFocus::PhysicalScreen,
 
             #[cfg(feature = "wayvr")]
             wayvr: None,

@@ -124,33 +124,16 @@ where
                 |width: u32, height: u32, proc: &[WayVRProcess]| -> anyhow::Result<()> {
                     let mut wayvr = create_wayvr::<T>(app, width, height, proc)?;
                     wayvr.state.want_visible = true;
-                    overlays.insert(wayvr.state.id, wayvr);
+                    overlays.insert(wayvr.state.id.0, wayvr);
                     Ok(())
                 };
-
-            let _ = insert(
-                800,
-                600,
-                &[WayVRProcess {
-                    exec_path: "konsole",
-                    args: &["-e", "htop"],
-                    env: &[],
-                }],
-            );
 
             let _ = insert(
                 1280,
                 720,
                 &[WayVRProcess {
                     exec_path: "cage",
-                    args: &[
-                        "chromium",
-                        "--",
-                        "--incognito",
-                        "--ozone-platform=wayland",
-                        "--start-maximized",
-                        "https://duckduckgo.com",
-                    ],
+                    args: &["chromium", "--", "-incognito"],
                     env: &[],
                 }],
             );
@@ -163,7 +146,7 @@ where
                 |width: u32, height: u32, proc: &[WayVRProcess]| -> anyhow::Result<()> {
                     let mut wayvr = create_wayvr::<T>(app, width, height, proc)?;
                     wayvr.state.want_visible = true;
-                    overlays.insert(wayvr.state.id, wayvr);
+                    overlays.insert(wayvr.state.id.0, wayvr);
                     Ok(())
                 };
 

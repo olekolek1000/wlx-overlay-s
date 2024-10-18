@@ -1,5 +1,5 @@
 use ::wayvr::display::DisplayHandle;
-use glam::{vec2, vec3a, Affine2, Vec2};
+use glam::{vec3a, Affine2};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use vulkano::image::SubresourceLayout;
 use wayvr::wayvr;
@@ -11,7 +11,7 @@ use crate::{
         overlay::{ui_transform, OverlayData, OverlayRenderer, OverlayState, SplitOverlayBackend},
     },
     graphics::WlxGraphics,
-    state,
+    state::{self, KeyboardFocus},
 };
 
 pub struct WayVRContext {
@@ -243,6 +243,7 @@ where
 
     let state = OverlayState {
         name: format!("WayVR Screen ({}x{})", width, height).into(),
+        keyboard_focus: Some(KeyboardFocus::WayVR),
         want_visible: true,
         interactable: true,
         recenter: true,
