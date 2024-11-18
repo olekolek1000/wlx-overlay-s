@@ -1,4 +1,4 @@
-use std::{io::Read, os::unix::net::UnixStream, path::PathBuf, sync::Arc};
+use std::{io::Read, os::unix::net::UnixStream, path::PathBuf, sync::Arc, time::Duration};
 
 use smithay::{
     backend::input::Keycode,
@@ -155,6 +155,13 @@ impl WayVRManager {
         Ok(())
     }
 
+    fn tick_event_loop(&mut self) -> anyhow::Result<()> {
+        let event_loop = self.state.event_loop.clone();
+        let mut event_loop = event_loop.borrow_mut();
+        event_loop.dispatch(Some(Duration::from_millis(16)), &mut self.state)?;
+        Ok(())
+    }
+
     pub fn tick_wayland(
         &mut self,
         displays: &mut display::DisplayVec,
@@ -163,6 +170,8 @@ impl WayVRManager {
         if let Err(e) = self.accept_connections(displays, processes) {
             log::error!("accept_connections failed: {}", e);
         }
+
+        self.tick_event_loop()?;
 
         self.display.dispatch_clients(&mut self.state)?;
         self.display.flush_clients()?;

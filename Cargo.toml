@@ -73,6 +73,7 @@ mint = "0.5.9"
 # WayVR-only deps
 khronos-egl = { version = "6.0.0", features = ["static"], optional = true }
 smithay = { git = "https://github.com/Smithay/smithay.git", default-features = false, features = [
+  "desktop",
   "renderer_gl",
   "backend_egl",
   "xwayland",

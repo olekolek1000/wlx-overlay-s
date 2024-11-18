@@ -20,13 +20,20 @@ use smallvec::SmallVec;
 use smithay::{
     backend::renderer::gles::GlesRenderer,
     input::SeatState,
-    reexports::wayland_server::{self, backend::ClientId},
+    reexports::{
+        calloop::{generic::Generic, EventLoop, LoopHandle},
+        wayland_server::{self, backend::ClientId, Client},
+    },
     wayland::{
         compositor,
         selection::data_device::DataDeviceState,
         shell::xdg::{ToplevelSurface, XdgShellState},
         shm::ShmState,
+        xdg_foreign::XdgForeignState,
+        xwayland_keyboard_grab::XWaylandKeyboardGrabState,
+        xwayland_shell,
     },
+    xwayland::{X11Wm, XWayland, XWaylandEvent},
 };
 use time::get_millis;
 
@@ -77,6 +84,10 @@ pub struct Config {
     pub auto_hide_delay: Option<u32>, // if None, auto-hide is disabled
 }
 
+pub struct CalloopData {
+    display_handle: wayland_server::DisplayHandle,
+}
+
 #[allow(dead_code)]
 pub struct WayVR {
     time_start: u64,
@@ -123,6 +134,13 @@ impl WayVR {
 
         let tasks = SyncEventQueue::new();
 
+        let event_loop = EventLoop::try_new()?;
+        let loop_handle = event_loop.handle();
+        let xwayland_shell_state =
+            xwayland_shell::XWaylandShellState::new::<Application>(&dh.clone());
+
+        let xdg_foreign_state = XdgForeignState::new::<Application>(&dh);
+
         let state = Application {
             compositor,
             xdg_shell,
@@ -131,6 +149,12 @@ impl WayVR {
             data_device,
             wayvr_tasks: tasks.clone(),
             redraw_requests: HashSet::new(),
+            event_loop: Rc::new(RefCell::new(event_loop)),
+            loop_handle: loop_handle.clone(),
+            xwm: None,
+            xwayland_shell_state,
+            xdisplay_number: None,
+            xdg_foreign_state,
         };
 
         let time_start = get_millis();
@@ -138,6 +162,8 @@ impl WayVR {
         let smithay_display = smithay_wrapper::get_egl_display(&egl_data)?;
         let smithay_context = smithay_wrapper::get_egl_context(&egl_data, &smithay_display)?;
         let gles_renderer = unsafe { GlesRenderer::new(smithay_context)? };
+
+        //WayVR::start_xwayland(display.handle(), loop_handle.clone());
 
         Ok(Self {
             gles_renderer,
@@ -151,6 +177,49 @@ impl WayVR {
             tasks,
             config,
         })
+    }
+
+    fn start_xwayland(
+        display_handle: wayland_server::DisplayHandle,
+        loop_handle: LoopHandle<'_, Application>,
+    ) {
+        log::info!("Starting XWayland");
+        use std::process::Stdio;
+
+        let (xwayland, client) = XWayland::spawn(
+            &display_handle,
+            None,
+            std::iter::empty::<(String, String)>(),
+            true,
+            Stdio::null(),
+            Stdio::null(),
+            |_| (),
+        )
+        .expect("Failed to start XWayland");
+
+        let ret = loop_handle.insert_source(xwayland, move |event, _, data| match event {
+            XWaylandEvent::Ready {
+                x11_socket,
+                display_number,
+            } => {
+                log::info!("XWayland server ready. Display number: {}", display_number);
+
+                let wm = X11Wm::start_wm(data.loop_handle.clone(), x11_socket, client.clone())
+                    .expect("Failed to attach X11 Window Manager");
+
+                data.xwm = Some(wm);
+                data.xdisplay_number = Some(display_number);
+            }
+            XWaylandEvent::Error => {
+                log::error!("Got XWaylandEvent::Error");
+            }
+        });
+        if let Err(e) = ret {
+            log::error!(
+                "Failed to insert the XWaylandSource into the event loop: {}",
+                e
+            );
+        }
     }
 
     pub fn tick_display(&mut self, display: display::DisplayHandle) -> anyhow::Result<()> {
