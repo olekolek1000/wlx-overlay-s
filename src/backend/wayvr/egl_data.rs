@@ -159,21 +159,27 @@ impl EGLData {
             );
 
             if num_mods == 0 {
-                anyhow::bail!("eglQueryDmaBufModifiersEXT modifier count is zero");
+                log::warn!("eglQueryDmaBufModifiersEXT modifier count is zero");
             }
 
             let mut mods: Vec<u64> = vec![0; num_mods as usize];
-            egl_query_dmabuf_modifiers_ext(
-                self.display.as_ptr(),
-                target_fourcc,
-                num_mods,
-                mods.as_mut_ptr(),
-                std::ptr::null_mut(),
-                &mut num_mods,
-            );
 
-            if mods[0] == 0xFFFFFFFFFFFFFFFF {
-                anyhow::bail!("modifier is -1")
+            if num_mods > 0 {
+                egl_query_dmabuf_modifiers_ext(
+                    self.display.as_ptr(),
+                    target_fourcc,
+                    num_mods,
+                    mods.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    &mut num_mods,
+                );
+
+                if mods[0] == 0xFFFFFFFFFFFFFFFF {
+                    anyhow::bail!("modifier is -1")
+                }
+            } else {
+                // EGL didn't return any modifiers, set everything to zero
+                mods.push(0x0);
             }
 
             log::trace!("Modifier list:");
