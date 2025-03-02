@@ -345,6 +345,7 @@ impl WayVR {
                     // Attach newly created toplevel surfaces to displays
                     for client in &self.state.manager.clients {
                         if client.client.id() == client_id {
+                            log::debug!("Got new toplevel window (owner PID: {})", client.pid);
                             if let Some(process_handle) =
                                 process::find_by_pid(&self.state.processes, client.pid)
                             {
@@ -636,6 +637,8 @@ impl WayVRState {
             .ok_or(anyhow::anyhow!(STR_INVALID_HANDLE_DISP))?;
 
         let res = display.spawn_process(exec_path, args, env)?;
+
+        log::debug!("Spawned Managed WayVR proces with PID {}", res.child.id());
 
         let handle = self
             .processes
