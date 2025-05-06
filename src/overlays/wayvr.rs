@@ -262,6 +262,21 @@ fn executable_exists_in_path(command: &str) -> bool {
     false
 }
 
+fn get_default_dashboard_exec() -> (
+    String,         /* exec path */
+    Option<String>, /* working directory */
+) {
+    if let Ok(appdir) = std::env::var("APPDIR") {
+        // Running in AppImage
+        let embedded_path = format!("{appdir}/usr/bin/wayvr-dashboard");
+        if executable_exists_in_path(&embedded_path) {
+            log::info!("Starting WayVR Dashboard from AppDir: {embedded_path}");
+            return (embedded_path, Some(format!("{appdir}/usr")));
+        }
+    }
+    (String::from("wayvr-dashboard"), None)
+}
+
 fn toggle_dashboard<O>(
     app: &mut AppState,
     overlays: &mut OverlayContainer<O>,
@@ -271,10 +286,14 @@ where
     O: Default,
 {
     let conf_dash = app.session.wayvr_config.dashboard.clone().map_or_else(
-        || config_wayvr::WayVRDashboard {
-            exec: String::from("wayvr-dashboard"),
-            args: None,
-            env: None,
+        || {
+            let (exec, working_dir) = get_default_dashboard_exec();
+            config_wayvr::WayVRDashboard {
+                exec,
+                working_dir,
+                args: None,
+                env: None,
+            }
         },
         |conf| conf,
     );
@@ -317,10 +336,6 @@ where
         overlay.state.z_order = Z_ORDER_DASHBOARD;
         overlay.state.reset(app, true);
 
-        let Some(conf_dash) = &app.session.wayvr_config.dashboard else {
-            unreachable!(); /* safe, not possible to trigger */
-        };
-
         overlays.add(overlay);
 
         let args_vec = &conf_dash
@@ -342,6 +357,7 @@ where
             &conf_dash.exec,
             args_vec,
             env_vec,
+            conf_dash.working_dir.as_deref(),
             userdata,
         )?;
 
@@ -879,6 +895,7 @@ where
                 &app_entry.exec,
                 args_vec,
                 env_vec,
+                None,
                 HashMap::default(),
             )?;
 

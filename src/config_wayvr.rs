@@ -120,6 +120,7 @@ fn def_blit_method() -> String {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct WayVRDashboard {
     pub exec: String,
+    pub working_dir: Option<String>,
     pub args: Option<String>,
     pub env: Option<Vec<String>>,
 }
