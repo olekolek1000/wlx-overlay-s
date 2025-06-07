@@ -79,7 +79,6 @@ pub struct WayVRDisplay {
     pub rotation: Option<Rotation>,
     pub pos: Option<[f32; 3]>,
     pub attach_to: Option<AttachTo>,
-    pub primary: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -164,15 +163,6 @@ impl WayVRConfig {
         self.displays.get(name)
     }
 
-    pub fn get_default_display(&self) -> Option<(String, &WayVRDisplay)> {
-        for (disp_name, disp) in &self.displays {
-            if disp.primary.unwrap_or(false) {
-                return Some((disp_name.clone(), disp));
-            }
-        }
-        None
-    }
-
     pub fn get_wayvr_config(
         config_general: &crate::config::GeneralConfig,
         config_wayvr: &Self,
@@ -196,29 +186,13 @@ impl WayVRConfig {
         config: &crate::config::GeneralConfig,
         tasks: &mut TaskContainer,
     ) -> anyhow::Result<Option<Rc<RefCell<WayVRData>>>> {
-        let primary_count = self
-            .displays
-            .iter()
-            .filter(|d| d.1.primary.unwrap_or(false))
-            .count();
-
-        if primary_count > 1 {
-            anyhow::bail!("Number of primary displays is more than 1")
-        } else if primary_count == 0 {
-            log::warn!(
-                "No primary display specified. External Wayland applications will not be attached."
-            );
-        }
-
         for (catalog_name, catalog) in &self.catalogs {
             for app in &catalog.apps {
-                if let Some(b) = app.shown_at_start {
-                    if b {
-                        tasks.enqueue(TaskType::WayVR(WayVRAction::AppClick {
-                            catalog_name: Arc::from(catalog_name.as_str()),
-                            app_name: Arc::from(app.name.as_str()),
-                        }));
-                    }
+                if app.shown_at_start.unwrap_or(false) {
+                    tasks.enqueue(TaskType::WayVR(WayVRAction::AppClick {
+                        catalog_name: Arc::from(catalog_name.as_str()),
+                        app_name: Arc::from(app.name.as_str()),
+                    }));
                 }
             }
         }

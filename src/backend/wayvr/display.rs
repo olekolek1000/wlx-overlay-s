@@ -61,12 +61,12 @@ pub struct Display {
     pub overlay_id: Option<OverlayID>,
     pub wants_redraw: bool,
     pub rendered_frame_count: u32,
-    pub primary: bool,
     pub wm: Rc<RefCell<window::WindowManager>>,
     pub displayed_windows: Vec<DisplayWindow>,
     wayland_env: super::WaylandEnv,
     last_pressed_time_ms: u64,
     pub no_windows_since: Option<u64>,
+    pub allow_auto_hide: bool,
 
     // Render data stuff
     gles_texture: GlesTexture, // TODO: drop texture
@@ -93,26 +93,26 @@ pub struct DisplayInitParams<'a> {
     pub renderer: &'a mut GlesRenderer,
     pub egl_data: Rc<egl_data::EGLData>,
     pub wayland_env: super::WaylandEnv,
-    pub width: u16,
-    pub height: u16,
+    pub width_px: u16,
+    pub height_px: u16,
     pub name: &'a str,
-    pub primary: bool,
+    pub allow_auto_hide: bool,
 }
 
 impl Display {
     pub fn new(params: DisplayInitParams) -> anyhow::Result<Self> {
-        if params.width > MAX_DISPLAY_SIZE {
+        if params.width_px > MAX_DISPLAY_SIZE {
             anyhow::bail!(
                 "display width ({}) is larger than {}",
-                params.width,
+                params.width_px,
                 MAX_DISPLAY_SIZE
             );
         }
 
-        if params.height > MAX_DISPLAY_SIZE {
+        if params.height_px > MAX_DISPLAY_SIZE {
             anyhow::bail!(
                 "display height ({}) is larger than {}",
-                params.height,
+                params.height_px,
                 MAX_DISPLAY_SIZE
             );
         }
@@ -123,8 +123,8 @@ impl Display {
         let tex_id = params.renderer.with_context(|gl| {
             smithay_wrapper::create_framebuffer_texture(
                 gl,
-                u32::from(params.width),
-                u32::from(params.height),
+                u32::from(params.width_px),
+                u32::from(params.height_px),
                 tex_format,
                 internal_format,
             )
@@ -144,17 +144,16 @@ impl Display {
         };
 
         let opaque = false;
-        let size = (i32::from(params.width), i32::from(params.height)).into();
+        let size = (i32::from(params.width_px), i32::from(params.height_px)).into();
         let gles_texture = unsafe {
             GlesTexture::from_raw(params.renderer, Some(tex_format), opaque, tex_id, size)
         };
 
         Ok(Self {
             egl_data: params.egl_data,
-            width: params.width,
-            height: params.height,
+            width: params.width_px,
+            height: params.height_px,
             name: String::from(params.name),
-            primary: params.primary,
             wayland_env: params.wayland_env,
             wm: params.wm,
             displayed_windows: Vec::new(),
@@ -169,6 +168,7 @@ impl Display {
             wants_redraw: true,
             rendered_frame_count: 0,
             layout: packet_server::WvrDisplayWindowLayout::Tiling,
+            allow_auto_hide: params.allow_auto_hide,
         })
     }
 
@@ -271,11 +271,15 @@ impl Display {
         if self.visible {
             if !self.displayed_windows.is_empty() {
                 self.no_windows_since = None;
-            } else if let Some(auto_hide_delay) = config.auto_hide_delay {
-                if let Some(s) = self.no_windows_since {
-                    if s + u64::from(auto_hide_delay) < get_millis() {
-                        // Auto-hide after specific time
-                        signals.send(WayVRSignal::DisplayVisibility(*handle, false));
+            }
+
+            if self.allow_auto_hide {
+                if let Some(auto_hide_delay) = config.auto_hide_delay {
+                    if let Some(s) = self.no_windows_since {
+                        if s + u64::from(auto_hide_delay) < get_millis() {
+                            // Auto-hide after specific time
+                            signals.send(WayVRSignal::DisplayVisibility(*handle, false));
+                        }
                     }
                 }
             }
@@ -288,7 +292,7 @@ impl Display {
                     self.displayed_windows
                         .retain(|win| win.process_handle != process_handle);
                     log::info!(
-                        "Cleanup finished for display \"{}\". Current window count: {}",
+                        "Process cleanup finished for display \"{}\". Current window count: {}",
                         self.name,
                         self.displayed_windows.len()
                     );
@@ -339,7 +343,7 @@ impl Display {
         let mut frame = renderer.render(size, Transform::Normal)?;
 
         let clear_color = if self.displayed_windows.is_empty() {
-            Color32F::new(0.5, 0.5, 0.5, 0.5)
+            Color32F::new(0.1, 0.1, 0.1, 0.1)
         } else {
             Color32F::new(0.0, 0.0, 0.0, 0.0)
         };

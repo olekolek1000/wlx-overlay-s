@@ -217,17 +217,19 @@ impl EGLData {
                 anyhow::bail!("modifier is -1")
             }
 
-            log::trace!("Modifier list:");
-            for modifier in &mods {
-                log::trace!("{modifier:#x}");
-            }
+            log::debug!(
+                "dmabuf modifier list: {:?}",
+                mods.iter()
+                    .map(|m| format!("{m:#x}"))
+                    .collect::<Vec<String>>()
+            );
 
             // We should not change these modifier values. Passing all of them to the Vulkan dmabuf
             // texture system causes significant graphical corruption due to invalid memory layout and
             // tiling on this specific GPU model (very probably others also have the same issue).
             // It is not guaranteed that this modifier will be present in other models.
             // If not, the full list of modifiers will be passed. Further testing is required.
-            // For now, it looks like only NAVI32-based gpus have this problem.
+            // For now, it looks like all RDNA3 and RDNA4 gpus have this problem.
             let mod_whitelist: [u64; 2] = [
                 0x200_0000_2086_bf04, /* AMD RX 7800 XT, Navi32 */
                 0x200_0000_1866_bf04, /* AMD RX 7600 XT, Navi33 */

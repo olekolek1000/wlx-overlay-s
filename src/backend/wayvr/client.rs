@@ -42,17 +42,21 @@ fn get_wayvr_env_from_pid(pid: i32) -> anyhow::Result<ProcessWayVREnv> {
 
     let lines: Vec<&str> = env_data.split('\0').filter(|s| !s.is_empty()).collect();
 
-    let mut env = ProcessWayVREnv {
-        display_auth: None,
-        display_name: None,
-    };
+    let mut env = ProcessWayVREnv::default();
 
     for line in lines {
         if let Some((key, value)) = line.split_once('=') {
-            if key == "WAYVR_DISPLAY_AUTH" {
-                env.display_auth = Some(String::from(value));
-            } else if key == "WAYVR_DISPLAY_NAME" {
-                env.display_name = Some(String::from(value));
+            match key {
+                "WAYVR_DISPLAY_AUTH" => {
+                    env.display_auth = Some(String::from(value));
+                }
+                "WAYVR_DISPLAY_WIDTH" => {
+                    env.display_width = Some(value.parse::<u16>().unwrap_or(1280).min(3840));
+                }
+                "WAYVR_DISPLAY_HEIGHT" => {
+                    env.display_height = Some(value.parse::<u16>().unwrap_or(720).min(2160));
+                }
+                _ => {}
             }
         }
     }
@@ -139,7 +143,7 @@ impl WayVRCompositor {
 
         // This is a new process which we didn't met before.
         // Treat external processes exclusively (spawned by the user or external program)
-        log::warn!(
+        log::info!(
             "External process ID {} connected to this Wayland server",
             creds.pid
         );

@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::{backend::wayvr::CreateDisplayParams, state::AppState};
 
 use super::{display, process, window, TickTask, WayVRSignal};
 use bytes::BufMut;
@@ -72,7 +72,7 @@ fn read_payload(conn: &mut local_socket::Stream, size: u32) -> Option<Payload> {
 
 pub struct TickParams<'a> {
     pub state: &'a mut super::WayVRState,
-    pub tasks: &'a mut Vec<TickTask>,
+    pub tick_tasks: &'a mut Vec<TickTask>,
     pub app: &'a AppState,
 }
 
@@ -215,15 +215,15 @@ impl Connection {
         serial: ipc::Serial,
         packet_params: packet_client::WvrDisplayCreateParams,
     ) -> anyhow::Result<()> {
-        let display_handle = params.state.create_display(
-            packet_params.width,
-            packet_params.height,
-            &packet_params.name,
-            false,
-        )?;
+        let display_handle = params.state.create_display(CreateDisplayParams {
+            width_px: packet_params.width,
+            height_px: packet_params.height,
+            name: &packet_params.name,
+            allow_auto_hide: true,
+        })?;
 
         params
-            .tasks
+            .tick_tasks
             .push(TickTask::NewDisplay(packet_params, Some(display_handle)));
 
         send_packet(

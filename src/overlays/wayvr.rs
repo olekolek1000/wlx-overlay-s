@@ -19,10 +19,10 @@ use crate::{
         wayvr::{
             self, display,
             server_ipc::{gen_args_vec, gen_env_vec},
-            WayVR,
+            CreateDisplayParams, WayVR,
         },
     },
-    config_wayvr,
+    config_wayvr::{self, WayVRDisplay},
     graphics::{CommandBuffers, WlxGraphics, WlxPipeline},
     gui::modular::button::{WayVRAction, WayVRDisplayClickAction},
     state::{self, AppState, KeyboardFocus},
@@ -73,25 +73,30 @@ impl WayVRData {
         })
     }
 
-    fn get_unique_display_name(&self, mut candidate: String) -> String {
+    fn get_unique_display_name(&self, name: &str) -> String {
         let mut num = 0;
 
-        while !self
-            .data
-            .state
-            .displays
-            .vec
-            .iter()
-            .flatten()
-            .any(|d| d.obj.name == candidate)
-        {
-            if num > 0 {
-                candidate = format!("{candidate} ({num})");
+        loop {
+            let candidate = if num == 0 {
+                String::from(name)
+            } else {
+                format!("{name} ({num})")
+            };
+
+            let mut occupied = false;
+            for (_, display) in self.data.state.displays.iter() {
+                if display.name == candidate {
+                    occupied = true;
+                    break;
+                }
             }
+
+            if !occupied {
+                return candidate;
+            }
+
             num += 1;
         }
-
-        candidate
     }
 }
 
@@ -220,31 +225,28 @@ fn get_or_create_display_by_name(
     wayvr: &mut WayVRData,
     disp_name: &str,
 ) -> anyhow::Result<display::DisplayHandle> {
-    let disp_handle =
-        if let Some(disp) = WayVR::get_display_by_name(&wayvr.data.state.displays, disp_name) {
-            disp
-        } else {
-            let conf_display = app
-                .session
-                .wayvr_config
-                .get_display(disp_name)
-                .ok_or_else(|| anyhow::anyhow!("Cannot find display named \"{}\"", disp_name))?
-                .clone();
+    if let Some(disp) = WayVR::get_display_by_name(&wayvr.data.state.displays, disp_name) {
+        return Ok(disp);
+    }
 
-            let disp_handle = wayvr.data.state.create_display(
-                conf_display.width,
-                conf_display.height,
-                disp_name,
-                conf_display.primary.unwrap_or(false),
-            )?;
+    let conf_display = app
+        .session
+        .wayvr_config
+        .get_display(disp_name)
+        .ok_or_else(|| anyhow::anyhow!("Cannot find display named \"{}\"", disp_name))?
+        .clone();
 
-            wayvr.overlays_to_create.push(OverlayToCreate {
-                conf_display,
-                disp_handle,
-            });
+    let disp_handle = wayvr.data.state.create_display(CreateDisplayParams {
+        width_px: conf_display.width,
+        height_px: conf_display.height,
+        name: disp_name,
+        allow_auto_hide: true,
+    })?;
 
-            disp_handle
-        };
+    wayvr.overlays_to_create.push(OverlayToCreate {
+        conf_display,
+        disp_handle,
+    });
 
     Ok(disp_handle)
 }
@@ -300,7 +302,6 @@ where
                     scale: None,
                     rotation: None,
                     pos: None,
-                    primary: None,
                 },
             },
         )?;
@@ -492,59 +493,69 @@ where
     for result in res {
         match result {
             wayvr::TickTask::NewExternalProcess(request) => {
-                let config = &app.session.wayvr_config;
+                let mut wayvr = r_wayvr.borrow_mut();
 
-                let disp_name = request.env.display_name.map_or_else(
-                    || {
-                        config
-                            .get_default_display()
-                            .map(|(display_name, _)| display_name)
-                    },
-                    |display_name| {
-                        config
-                            .get_display(display_name.as_str())
-                            .map(|_| display_name)
-                    },
+                // TODO (low priority): Set display name to process name instead of "external_PID"?
+                let unique_name =
+                    wayvr.get_unique_display_name(&format!("external_{}", request.pid));
+                log::info!(
+                    "Registering external process with PID {} (creating display with name \"{}\")",
+                    request.pid,
+                    unique_name
                 );
 
-                if let Some(disp_name) = disp_name {
-                    let mut wayvr = r_wayvr.borrow_mut();
+                let width = request.env.display_width.unwrap_or(1280);
+                let height = request.env.display_height.unwrap_or(720);
 
-                    log::info!("Registering external process with PID {}", request.pid);
+                let disp_handle = wayvr.data.state.create_display(CreateDisplayParams {
+                    width_px: width,
+                    height_px: height,
+                    name: &unique_name,
+                    allow_auto_hide: false,
+                })?;
 
-                    let disp_handle = get_or_create_display_by_name(app, &mut wayvr, &disp_name)?;
+                wayvr.overlays_to_create.push(OverlayToCreate {
+                    conf_display: WayVRDisplay {
+                        attach_to: None,
+                        width,
+                        height,
+                        pos: None,
+                        rotation: None,
+                        scale: None,
+                    },
+                    disp_handle,
+                });
 
-                    wayvr
-                        .data
-                        .state
-                        .add_external_process(disp_handle, request.pid);
+                wayvr
+                    .data
+                    .state
+                    .add_external_process(disp_handle, request.pid);
 
-                    wayvr
-                        .data
-                        .state
-                        .manager
-                        .add_client(wayvr::client::WayVRClient {
-                            client: request.client,
-                            display_handle: disp_handle,
-                            pid: request.pid,
-                        });
-                }
+                wayvr
+                    .data
+                    .state
+                    .manager
+                    .add_client(wayvr::client::WayVRClient {
+                        client: request.client,
+                        display_handle: disp_handle,
+                        pid: request.pid,
+                    });
             }
             wayvr::TickTask::NewDisplay(cpar, disp_handle) => {
                 log::info!("Creating new display with name \"{}\"", cpar.name);
 
                 let mut wayvr = r_wayvr.borrow_mut();
 
-                let unique_name = wayvr.get_unique_display_name(cpar.name);
+                let unique_name = wayvr.get_unique_display_name(&cpar.name);
 
                 let disp_handle = match disp_handle {
                     Some(d) => d,
-                    None => wayvr.data.state.create_display(
-                        cpar.width,
-                        cpar.height,
-                        &unique_name,
-                        false,
-                    )?,
+                    None => wayvr.data.state.create_display(CreateDisplayParams {
+                        width_px: cpar.width,
+                        height_px: cpar.height,
+                        name: &unique_name,
+                        allow_auto_hide: true,
+                    })?,
                 };
 
                 wayvr.overlays_to_create.push(OverlayToCreate {
@@ -554,7 +565,6 @@ where
                         width: cpar.width,
                         height: cpar.height,
                         pos: None,
-                        primary: None,
                         rotation: None,
                         scale: cpar.scale,
                     },

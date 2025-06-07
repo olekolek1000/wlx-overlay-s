@@ -15,7 +15,6 @@ use display::{Display, DisplayInitParams, DisplayVec};
 use event_queue::SyncEventQueue;
 use process::ProcessVec;
 use server_ipc::WayVRServer;
-use smallvec::SmallVec;
 use smithay::{
     backend::{
         egl,
@@ -42,7 +41,7 @@ use wayvr_ipc::{packet_client, packet_server};
 
 use crate::{hid::MODS_TO_KEYS, state::AppState};
 
-const STR_INVALID_HANDLE_DISP: &str = "Invalid display handle";
+const STR_INVALID_HANDLE_DISP: &str = "Requested an invalid or already destroyed display handle";
 
 #[derive(Debug, Clone)]
 pub struct WaylandEnv {
@@ -56,10 +55,12 @@ impl WaylandEnv {
     }
 }
 
-#[derive(Clone)]
+#[allow(clippy::struct_field_names)]
+#[derive(Default, Clone)]
 pub struct ProcessWayVREnv {
     pub display_auth: Option<String>,
-    pub display_name: Option<String>, // Externally spawned process by a user script
+    pub display_width: Option<u16>,
+    pub display_height: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -144,6 +145,13 @@ pub enum TickTask {
         packet_client::WvrDisplayCreateParams,
         Option<display::DisplayHandle>, /* existing handle? */
     ),
+}
+
+pub struct CreateDisplayParams<'a> {
+    pub width_px: u16,
+    pub height_px: u16,
+    pub name: &'a str,
+    pub allow_auto_hide: bool,
 }
 
 impl WayVR {
@@ -280,7 +288,7 @@ impl WayVR {
             .get_mut(&display)
             .ok_or_else(|| anyhow::anyhow!(STR_INVALID_HANDLE_DISP))?;
 
-        /* Buffer warm-up is required, always two first calls of this function are always rendered */
+        /* Buffer warm-up is required, two first calls of this function are always rendered */
         if !display.wants_redraw && display.rendered_frame_count >= 2 {
             // Nothing changed, do not render
             return Ok(false);
@@ -302,11 +310,11 @@ impl WayVR {
 
     #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
     pub fn tick_events(&mut self, app: &AppState) -> anyhow::Result<Vec<TickTask>> {
-        let mut tasks: Vec<TickTask> = Vec::new();
+        let mut tick_tasks: Vec<TickTask> = Vec::new();
 
         self.ipc_server.tick(&mut server_ipc::TickParams {
             state: &mut self.state,
-            tasks: &mut tasks,
+            tick_tasks: &mut tick_tasks,
             app,
         });
 
@@ -324,123 +332,9 @@ impl WayVR {
             }
         }
 
-        // Tick all child processes
-        let mut to_remove: SmallVec<[(process::ProcessHandle, display::DisplayHandle); 2]> =
-            SmallVec::new();
+        self.state.tick(&mut tick_tasks)?;
 
-        for (handle, process) in self.state.processes.iter_mut() {
-            if !process.is_running() {
-                to_remove.push((handle, process.display_handle()));
-            }
-        }
-
-        for (p_handle, disp_handle) in &to_remove {
-            self.state.processes.remove(p_handle);
-
-            if let Some(display) = self.state.displays.get_mut(disp_handle) {
-                display
-                    .tasks
-                    .send(display::DisplayTask::ProcessCleanup(*p_handle));
-                display.wants_redraw = true;
-            }
-        }
-
-        for (handle, display) in self.state.displays.iter_mut() {
-            display.tick(&self.state.config, &handle, &mut self.state.signals);
-        }
-
-        if !to_remove.is_empty() {
-            self.state.signals.send(WayVRSignal::BroadcastStateChanged(
-                packet_server::WvrStateChanged::ProcessRemoved,
-            ));
-        }
-
-        while let Some(task) = self.state.tasks.read() {
-            match task {
-                WayVRTask::NewExternalProcess(req) => {
-                    tasks.push(TickTask::NewExternalProcess(req));
-                }
-                WayVRTask::NewToplevel(client_id, toplevel) => {
-                    // Attach newly created toplevel surfaces to displays
-                    for client in &self.state.manager.clients {
-                        if client.client.id() != client_id {
-                            continue;
-                        }
-
-                        let Some(process_handle) =
-                            process::find_by_pid(&self.state.processes, client.pid)
-                        else {
-                            log::error!(
-                                    "WayVR window creation failed: Unexpected process ID {}. It wasn't registered before.",
-                                    client.pid
-                                );
-                            continue;
-                        };
-
-                        let window_handle = self
-                            .state
-                            .wm
-                            .borrow_mut()
-                            .create_window(client.display_handle, &toplevel);
-
-                        let Some(display) = self.state.displays.get_mut(&client.display_handle)
-                        else {
-                            // This shouldn't happen, scream if it does
-                            log::error!("Could not attach window handle into display");
-                            continue;
-                        };
-
-                        display.add_window(window_handle, process_handle, &toplevel);
-                        self.state.signals.send(WayVRSignal::BroadcastStateChanged(
-                            packet_server::WvrStateChanged::WindowCreated,
-                        ));
-                    }
-                }
-                WayVRTask::DropToplevel(client_id, toplevel) => {
-                    for client in &self.state.manager.clients {
-                        if client.client.id() != client_id {
-                            continue;
-                        }
-
-                        let mut wm = self.state.wm.borrow_mut();
-                        let Some(window_handle) = wm.find_window_handle(&toplevel) else {
-                            log::warn!("DropToplevel: Couldn't find matching window handle");
-                            continue;
-                        };
-
-                        let Some(display) = self.state.displays.get_mut(&client.display_handle)
-                        else {
-                            log::warn!("DropToplevel: Couldn't find matching display");
-                            continue;
-                        };
-
-                        display.remove_window(window_handle);
-                        wm.remove_window(window_handle);
-
-                        drop(wm);
-
-                        display.reposition_windows();
-                    }
-                }
-                WayVRTask::ProcessTerminationRequest(process_handle) => {
-                    if let Some(process) = self.state.processes.get_mut(&process_handle) {
-                        process.terminate();
-                    }
-                }
-            }
-        }
-
-        self.state
-            .manager
-            .tick_wayland(&mut self.state.displays, &mut self.state.processes)?;
-
-        if self.state.ticks % 200 == 0 {
-            self.state.manager.cleanup_clients();
-        }
-
-        self.state.ticks += 1;
-
-        Ok(tasks)
+        Ok(tick_tasks)
     }
 
     pub fn tick_finish(&mut self) -> anyhow::Result<()> {
@@ -453,18 +347,6 @@ impl WayVR {
                 gl.Finish();
             })?;
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub fn get_primary_display(displays: &DisplayVec) -> Option<display::DisplayHandle> {
-        for (idx, cell) in displays.vec.iter().enumerate() {
-            if let Some(cell) = cell {
-                if cell.obj.primary {
-                    return Some(DisplayVec::get_handle(cell, idx));
-                }
-            }
-        }
-        None
     }
 
     pub fn get_display_by_name(
@@ -489,6 +371,167 @@ impl WayVR {
 }
 
 impl WayVRState {
+    fn print_displays(&self) {
+        let disp_names: Vec<&str> = self
+            .displays
+            .iter()
+            .map(|disp| disp.1.name.as_str())
+            .collect();
+
+        log::debug!("display names: {disp_names:?}");
+    }
+
+    fn tick_processes(&mut self) {
+        let mut processes_to_remove =
+            Vec::<(process::ProcessHandle, display::DisplayHandle)>::new();
+
+        for (handle, process) in self.processes.iter_mut() {
+            if !process.is_running() {
+                processes_to_remove.push((handle, process.display_handle()));
+            }
+        }
+
+        for (p_handle, disp_handle) in &processes_to_remove {
+            self.processes.remove(p_handle);
+
+            if let Some(display) = self.displays.get_mut(disp_handle) {
+                display
+                    .tasks
+                    .send(display::DisplayTask::ProcessCleanup(*p_handle));
+                display.wants_redraw = true;
+            }
+        }
+
+        if !processes_to_remove.is_empty() {
+            self.signals.send(WayVRSignal::BroadcastStateChanged(
+                packet_server::WvrStateChanged::ProcessRemoved,
+            ));
+        }
+    }
+
+    fn tick_displays(&mut self) -> anyhow::Result<()> {
+        let mut displays_to_remove = Vec::<display::DisplayHandle>::new();
+
+        'outer: for (handle, display) in self.displays.iter_mut() {
+            display.tick(&self.config, &handle, &mut self.signals);
+
+            // check which displays should be removed instead of hidden
+            if display.allow_auto_hide || !display.displayed_windows.is_empty() {
+                continue;
+            }
+
+            for (_, process) in self.processes.iter() {
+                if process.display_handle() == handle {
+                    continue 'outer; // still being used, do not destroy
+                }
+            }
+
+            log::debug!(
+                "Destroying temporary display with name \"{}\"",
+                display.name
+            );
+
+            displays_to_remove.push(handle);
+        }
+
+        for handle in displays_to_remove {
+            self.destroy_display(handle)?;
+        }
+
+        Ok(())
+    }
+
+    fn process_tasks(&mut self, tick_tasks: &mut Vec<TickTask>) {
+        while let Some(task) = self.tasks.read() {
+            match task {
+                WayVRTask::NewExternalProcess(req) => {
+                    tick_tasks.push(TickTask::NewExternalProcess(req));
+                }
+                WayVRTask::NewToplevel(client_id, toplevel) => {
+                    // Attach newly created toplevel surfaces to displays
+                    for client in &self.manager.clients {
+                        if client.client.id() != client_id {
+                            continue;
+                        }
+
+                        let Some(process_handle) =
+                            process::find_by_pid(&self.processes, client.pid)
+                        else {
+                            log::error!(
+                                    "WayVR window creation failed: Unexpected process ID {}. It wasn't registered before.",
+                                    client.pid
+                                );
+                            continue;
+                        };
+
+                        let window_handle = self
+                            .wm
+                            .borrow_mut()
+                            .create_window(client.display_handle, &toplevel);
+
+                        let Some(display) = self.displays.get_mut(&client.display_handle) else {
+                            // This shouldn't happen, scream if it does
+                            log::error!("Could not attach window handle into display");
+                            continue;
+                        };
+
+                        display.add_window(window_handle, process_handle, &toplevel);
+                        self.signals.send(WayVRSignal::BroadcastStateChanged(
+                            packet_server::WvrStateChanged::WindowCreated,
+                        ));
+                    }
+                }
+                WayVRTask::DropToplevel(client_id, toplevel) => {
+                    for client in &self.manager.clients {
+                        if client.client.id() != client_id {
+                            continue;
+                        }
+
+                        let mut wm = self.wm.borrow_mut();
+                        let Some(window_handle) = wm.find_window_handle(&toplevel) else {
+                            log::warn!("DropToplevel: Couldn't find matching window handle");
+                            continue;
+                        };
+
+                        let Some(display) = self.displays.get_mut(&client.display_handle) else {
+                            log::warn!("DropToplevel: Couldn't find matching display");
+                            continue;
+                        };
+
+                        display.remove_window(window_handle);
+                        wm.remove_window(window_handle);
+
+                        drop(wm);
+
+                        display.reposition_windows();
+                    }
+                }
+                WayVRTask::ProcessTerminationRequest(process_handle) => {
+                    if let Some(process) = self.processes.get_mut(&process_handle) {
+                        process.terminate();
+                    }
+                }
+            }
+        }
+    }
+
+    fn tick(&mut self, tick_tasks: &mut Vec<TickTask>) -> anyhow::Result<()> {
+        self.tick_processes();
+        self.tick_displays()?;
+        self.process_tasks(tick_tasks);
+
+        self.manager
+            .tick_wayland(&mut self.displays, &mut self.processes)?;
+
+        if self.ticks % 200 == 0 {
+            self.manager.cleanup_clients();
+        }
+
+        self.ticks += 1;
+
+        Ok(())
+    }
+
     pub fn send_mouse_move(&mut self, display: display::DisplayHandle, x: u32, y: u32) {
         if let Some(display) = self.displays.get(&display) {
             display.send_mouse_move(&self.config, &mut self.manager, x, y);
@@ -553,10 +596,7 @@ impl WayVRState {
 
     pub fn create_display(
         &mut self,
-        width: u16,
-        height: u16,
-        name: &str,
-        primary: bool,
+        params: CreateDisplayParams,
     ) -> anyhow::Result<display::DisplayHandle> {
         let display = display::Display::new(DisplayInitParams {
             wm: self.wm.clone(),
@@ -564,16 +604,18 @@ impl WayVRState {
             renderer: &mut self.manager.state.gles_renderer,
             wayland_env: self.manager.wayland_env.clone(),
             config: &self.config,
-            width,
-            height,
-            name,
-            primary,
+            width_px: params.width_px,
+            height_px: params.height_px,
+            name: params.name,
+            allow_auto_hide: params.allow_auto_hide,
         })?;
         let handle = self.displays.add(display);
 
         self.signals.send(WayVRSignal::BroadcastStateChanged(
             packet_server::WvrStateChanged::DisplayCreated,
         ));
+
+        self.print_displays();
 
         Ok(handle)
     }
@@ -591,7 +633,7 @@ impl WayVRState {
 
         let mut process_names = Vec::<String>::new();
 
-        for (_, process) in self.processes.iter_mut() {
+        for (_, process) in self.processes.iter() {
             if process.display_handle() == handle {
                 process_names.push(process.get_name());
             }
@@ -606,26 +648,21 @@ impl WayVRState {
 
         self.manager.cleanup_clients();
 
-        for client in &self.manager.clients {
-            if client.display_handle == handle {
-                // This shouldn't happen, but make sure we are all set to destroy this display
-                anyhow::bail!("Wayland client still exists");
-            }
-        }
-
         self.displays.remove(&handle);
 
         self.signals.send(WayVRSignal::BroadcastStateChanged(
             packet_server::WvrStateChanged::DisplayRemoved,
         ));
 
+        self.print_displays();
+
         Ok(())
     }
 
     pub fn get_or_create_dashboard_display(
         &mut self,
-        width: u16,
-        height: u16,
+        width_px: u16,
+        height_px: u16,
         name: &str,
     ) -> anyhow::Result<(bool /* newly created? */, display::DisplayHandle)> {
         if let Some(handle) = &self.dashboard_display {
@@ -635,9 +672,14 @@ impl WayVRState {
             }
         }
 
-        let new_disp = self.create_display(width, height, name, false)?;
-        self.dashboard_display = Some(new_disp);
+        let new_disp = self.create_display(CreateDisplayParams {
+            name,
+            width_px,
+            height_px,
+            allow_auto_hide: true,
+        })?;
 
+        self.dashboard_display = Some(new_disp);
         Ok((true, new_disp))
     }
 
